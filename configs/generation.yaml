@@ -1,0 +1,46 @@
+# Hydra config for synthetic data generation
+# Run: python src/generate_synthetic_data.py
+
+model:
+  path: /Users/mike/projects/Domain-Aware-SD/TurboSparse-Mistral-Instruct
+  trust_remote_code: true
+  dtype: bfloat16
+  # vLLM tensor parallelism (number of GPUs)
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.90
+
+data:
+  flan_dir: /Users/mike/projects/Domain-Aware-SD/flan
+  split: train
+  # Max samples to process per cluster (null = all)
+  max_samples_per_cluster: 500
+  # Shuffle before sampling
+  shuffle: true
+  shuffle_seed: 42
+
+generation:
+  # Top-k for logprobs capture (1 trunk + 9 alternatives)
+  logprobs: 10
+  # Generation params
+  max_new_tokens: 256
+  temperature: 1.0
+  top_p: 0.95
+  # Stop on EOS
+  stop_on_eos: true
+  # Batch size for vLLM
+  batch_size: 32
+
+output:
+  dir: /Users/mike/projects/Domain-Aware-SD/data/synthetic
+  version: v1
+  # Save raw logits in addition to probs
+  save_logprobs: false
+
+s3:
+  bucket: domain-aware-sd
+  prefix: data/synthetic
+  upload_after_generation: false
+
+mlflow:
+  experiment_name: synthetic_data_generation
+  tracking_uri: ./mlruns
