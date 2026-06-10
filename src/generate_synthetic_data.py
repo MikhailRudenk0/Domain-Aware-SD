@@ -90,7 +90,7 @@ def logprobs_to_top10(logprobs_at_position: dict) -> list[dict]:
         logprob = lp_obj.logprob if hasattr(lp_obj, "logprob") else lp_obj
         prob = math.exp(logprob)
         token_str = lp_obj.decoded_token if hasattr(lp_obj, "decoded_token") else ""
-        entries.append({"token_id": int(token_id), "prob": round(prob, 6), "token": token_str})
+        entries.append({"token_id": int(token_id), "prob": round(prob, 3), "token": token_str})
     entries.sort(key=lambda x: x["prob"], reverse=True)
     return entries[:10]
 
@@ -231,7 +231,7 @@ def generate_cluster_transformers(
                 top10_at_step = [
                     {
                         "token_id": int(top_ids[k]),
-                        "prob": round(float(top_probs[k]), 6),
+                        "prob": round(float(top_probs[k]), 3),
                         "token": tokenizer.decode([top_ids[k]]),
                     }
                     for k in range(10)
