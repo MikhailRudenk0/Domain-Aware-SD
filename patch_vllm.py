@@ -7,10 +7,10 @@ Two patches are applied:
   1. registry.py — register "BambooForCausalLM" → MistralForCausalLM so vLLM
      recognises the architecture name from config.json.
 
-  2. llama.py — remove the hard ValueError that rejects any activation other
-     than "silu". Bamboo uses "relu" in its config; vLLM's LlamaMLP raises on
-     load without this patch. After patching, relu (and any other activation
-     present in PyTorch's ACT2FN table) is accepted silently.
+  2. llama.py — neutralise the hard check that rejects activations other than
+     "silu". Bamboo uses "relu"; without this patch vLLM raises ValueError on
+     load. The fix replaces the if-condition with `if False:` so the body is
+     never executed but the file stays syntactically valid.
 
 Both patches are idempotent and reversible.
 
@@ -26,16 +26,16 @@ import re
 import sys
 from pathlib import Path
 
-# ── Patch 1: registry ────────────────────────────────────────────────────────
+# ── Patch 1: registry ─────────────────────────────────────────────────────────
 REGISTRY_ENTRY  = '"BambooForCausalLM": ("mistral", "MistralForCausalLM"),'
 REGISTRY_MARKER = "# patch: BambooForCausalLM"
 REGISTRY_ANCHOR = re.compile(r'"MistralForCausalLM"\s*:\s*\("mistral"')
 
 # ── Patch 2: llama.py relu ────────────────────────────────────────────────────
-# vLLM's LlamaMLP raises ValueError when hidden_act != "silu".
-# We locate the raise by the unique substring in its message and comment it out.
-RELU_MARKER   = "# patch: allow non-silu activations (relu for Bamboo)"
-RELU_NEEDLE   = "Only silu is supported for now."   # unique string in the raise message
+# Unique string from the error message we want to suppress.
+RELU_NEEDLE = "Only silu is supported for now."
+# Tag embedded in the patched if-line so we can find and revert it.
+RELU_MARKER = "patch:relu"
 
 
 def find_vllm_root() -> Path:
@@ -49,7 +49,7 @@ def find_vllm_root() -> Path:
 def find_registry(root: Path) -> Path:
     p = root / "model_executor" / "models" / "registry.py"
     if not p.exists():
-        sys.exit(f"Registry not found: {p}")
+        sys.exit(f"registry.py not found: {p}")
     return p
 
 
@@ -60,18 +60,17 @@ def find_llama(root: Path) -> Path:
     return p
 
 
-# ── Registry patch ────────────────────────────────────────────────────────────
+# ── Registry patch ─────────────────────────────────────────────────────────────
 
 def registry_apply(path: Path) -> bool:
     text = path.read_text()
     if REGISTRY_MARKER in text:
-        return False  # already applied
+        return False
 
     m = REGISTRY_ANCHOR.search(text)
     if not m:
         sys.exit(
             'Could not find "MistralForCausalLM" anchor in registry.py.\n'
-            "The vLLM version may use a different registry format.\n"
             f"Add manually:  {REGISTRY_ENTRY}"
         )
 
@@ -95,67 +94,74 @@ def registry_present(path: Path) -> bool:
     return REGISTRY_MARKER in path.read_text()
 
 
-# ── llama.py relu patch ───────────────────────────────────────────────────────
+# ── llama.py relu patch ────────────────────────────────────────────────────────
+#
+# Strategy: find the `if <cond>:` guard that gates the raise, then replace
+# ONLY the condition with `False`.  The raise body stays intact and is never
+# executed.  This is safe because:
+#   • The file remains syntactically valid (no unclosed parens, no empty body).
+#   • `if False:` + original raise body = dead code, no runtime effect.
+#
+# We locate the if-guard by scanning forward: find an `if` line such that
+# within the next few lines there is `raise ValueError` and eventually
+# RELU_NEEDLE.  This is more robust than walking backward from the needle.
+
+def _find_if_guard_idx(lines: list[str]) -> int | None:
+    for i, line in enumerate(lines):
+        if not re.match(r'\s+if\b', line):
+            continue
+        # Within the next 5 lines look for raise ValueError
+        for j in range(i + 1, min(i + 6, len(lines))):
+            if "raise ValueError" not in lines[j]:
+                continue
+            # Within the next 5 lines after raise look for the needle
+            for k in range(j, min(j + 6, len(lines))):
+                if RELU_NEEDLE in lines[k]:
+                    return i
+    return None
+
 
 def relu_apply(path: Path) -> bool:
-    """
-    Find the raise ValueError block that contains RELU_NEEDLE and comment it out.
-    Handles both single-line and multi-line raise statements.
-    """
     text = path.read_text()
     if RELU_MARKER in text:
-        return False  # already applied
+        return False
+
     if RELU_NEEDLE not in text:
         sys.exit(
-            f"Could not find the silu-only check in llama.py (needle: {RELU_NEEDLE!r}).\n"
-            "The vLLM version may have changed. Check the file manually:\n"
-            f"  {path}"
+            f"Cannot find {RELU_NEEDLE!r} in {path}.\n"
+            "The vLLM version may have changed its error message. "
+            "Check llama.py manually."
+        )
+
+    # Detect a broken state left by a previous bad patch attempt
+    try:
+        compile(text, str(path), "exec")
+    except SyntaxError as e:
+        sys.exit(
+            f"llama.py has a SyntaxError ({e}) — likely from a previous failed patch.\n"
+            "Restore it by reinstalling vLLM, then re-run this script:\n"
+            "  pip install --force-reinstall --no-deps vllm"
         )
 
     lines = text.splitlines(keepends=True)
-    out = []
-    i = 0
-    patched = False
-    while i < len(lines):
-        line = lines[i]
-        if RELU_NEEDLE in line:
-            # Walk backward to find the start of the raise / if block
-            # Find the raise statement that contains or precedes this line
-            raise_start = i
-            while raise_start > 0 and "raise" not in lines[raise_start]:
-                raise_start -= 1
+    idx = _find_if_guard_idx(lines)
 
-            # Also comment out any single-line `if` that guards this raise
-            if_start = raise_start
-            prev = raise_start - 1
-            if prev >= 0 and re.match(r'\s*if\b', lines[prev]):
-                if_start = prev
+    if idx is None:
+        sys.exit(
+            f"Cannot find the if-guard for the silu check in {path}.\n"
+            "Patch manually: find `if ... silu ...` → change condition to `False`."
+        )
 
-            # Find the end of the raise statement (closing paren)
-            raise_end = raise_start
-            open_parens = 0
-            for j in range(raise_start, len(lines)):
-                open_parens += lines[j].count("(") - lines[j].count(")")
-                raise_end = j
-                if open_parens <= 0:
-                    break
+    # Parse the if line to extract indentation and original condition
+    m = re.match(r'(\s*)if\s+(.*?):\s*$', lines[idx].rstrip())
+    if not m:
+        sys.exit(f"Cannot parse if line {idx + 1}: {lines[idx]!r}")
 
-            # Comment out lines from if_start to raise_end (inclusive)
-            indent = re.match(r'(\s*)', lines[if_start]).group(1)
-            marker_line = f"{indent}{RELU_MARKER}\n"
-            out.append(marker_line)
-            for j in range(if_start, raise_end + 1):
-                out.append(indent + "# " + lines[j].lstrip())
-            i = raise_end + 1
-            patched = True
-        else:
-            out.append(line)
-            i += 1
+    indent, cond = m.group(1), m.group(2)
 
-    if not patched:
-        sys.exit("Failed to locate and patch the raise block in llama.py.")
-
-    path.write_text("".join(out))
+    # Replace `if <cond>:` with `if False:` — embed original cond for undo
+    lines[idx] = f"{indent}if False:  # {RELU_MARKER} was=({cond})\n"
+    path.write_text("".join(lines))
     return True
 
 
@@ -165,23 +171,20 @@ def relu_remove(path: Path) -> bool:
         return False
 
     lines = text.splitlines(keepends=True)
-    out = []
-    i = 0
-    while i < len(lines):
-        if RELU_MARKER in lines[i]:
-            # Skip the marker line and all following comment lines that belong to the block
-            i += 1
-            while i < len(lines) and re.match(r'\s*#', lines[i]):
-                # Stop if this comment is something unrelated (doesn't look like commented code)
-                if RELU_NEEDLE in lines[i] or "raise" in lines[i] or "if " in lines[i]:
-                    i += 1
-                else:
-                    break
+    result = []
+    for line in lines:
+        if RELU_MARKER in line:
+            # Restore original condition from embedded comment
+            m_indent = re.match(r'(\s*)', line)
+            m_cond   = re.search(r'was=\((.+)\)', line)
+            indent = m_indent.group(1) if m_indent else ""
+            if m_cond:
+                result.append(f"{indent}if {m_cond.group(1)}:\n")
+            # If we can't parse it, just drop the line (body still intact below)
         else:
-            out.append(lines[i])
-            i += 1
+            result.append(line)
 
-    path.write_text("".join(out))
+    path.write_text("".join(result))
     return True
 
 
@@ -189,13 +192,13 @@ def relu_present(path: Path) -> bool:
     return RELU_MARKER in path.read_text()
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# ── CLI ────────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Patch vLLM for BambooForCausalLM")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--check", action="store_true", help="Check if patches are present")
-    group.add_argument("--undo",  action="store_true", help="Remove patches")
+    group.add_argument("--check", action="store_true", help="Verify both patches are present")
+    group.add_argument("--undo",  action="store_true", help="Remove both patches")
     args = parser.parse_args()
 
     root     = find_vllm_root()
