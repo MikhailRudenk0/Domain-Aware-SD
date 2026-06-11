@@ -2,7 +2,7 @@
 """
 Patch vLLM to support BambooForCausalLM (TurboSparse-Mistral).
 
-Two patches are applied:
+Three patches are applied:
 
   1. registry.py — register "BambooForCausalLM" → MistralForCausalLM so vLLM
      recognises the architecture name from config.json.
@@ -12,13 +12,19 @@ Two patches are applied:
      load. The fix replaces the if-condition with `if False:` so the body is
      never executed but the file stays syntactically valid.
 
-Both patches are idempotent and reversible.
+  3. llama.py — skip unknown weight keys in load_weights. Bamboo checkpoints
+     contain extra predictor MLP weights (e.g. layers.0.mlp.predictor.fc1.weight)
+     that don't exist in MistralForCausalLM. vLLM's weight loader does a strict
+     dict lookup and raises KeyError on these keys. The fix inserts a
+     `if name not in params_dict: continue` guard before the lookup.
+
+All patches are idempotent and reversible.
 
 Usage:
     conda activate domain_sd
-    python patch_vllm.py           # apply both patches
-    python patch_vllm.py --check   # verify both patches are present
-    python patch_vllm.py --undo    # remove both patches
+    python patch_vllm.py           # apply all patches
+    python patch_vllm.py --check   # verify all patches are present
+    python patch_vllm.py --undo    # remove all patches
 """
 
 import argparse
@@ -36,6 +42,13 @@ REGISTRY_ANCHOR = re.compile(r'"MistralForCausalLM"\s*:\s*\("mistral"')
 RELU_NEEDLE = "Only silu is supported for now."
 # Tag embedded in the patched if-line so we can find and revert it.
 RELU_MARKER = "patch:relu"
+
+# ── Patch 3: llama.py skip unknown weights ────────────────────────────────────
+# We find `param = params_dict[name]` inside load_weights and insert a guard
+# before it so that Bamboo's extra predictor weights are silently skipped.
+SKIP_NEEDLE  = "param = params_dict[name]"
+SKIP_MARKER  = "patch:skip-unknown-weights"
+SKIP_GUARD   = "if name not in params_dict: continue"
 
 
 def find_vllm_root() -> Path:
@@ -192,13 +205,81 @@ def relu_present(path: Path) -> bool:
     return RELU_MARKER in path.read_text()
 
 
+# ── llama.py skip-unknown-weights patch ───────────────────────────────────────
+#
+# Bamboo checkpoints contain extra predictor MLP weights
+# (e.g. layers.N.mlp.predictor.fc1.weight / fc2.weight) that are absent from
+# vLLM's MistralForCausalLM parameter dict.  load_weights does a bare
+# `param = params_dict[name]` which raises KeyError on these keys.
+#
+# Fix: insert `if name not in params_dict: continue` on its own line
+# immediately before the lookup, indented to match.  The guard line embeds
+# SKIP_MARKER as a comment so we can find and remove it later.
+#
+# To locate the right line we search for SKIP_NEEDLE inside a function that
+# also contains "load_weights" nearby, to avoid hitting any other dict lookup
+# that happens to use the same variable names.
+
+def _find_skip_needle_idx(lines: list[str]) -> int | None:
+    """Return index of `param = params_dict[name]` inside load_weights."""
+    in_load_weights = False
+    for i, line in enumerate(lines):
+        # Track whether we're inside the load_weights method
+        if re.search(r'def\s+load_weights\b', line):
+            in_load_weights = True
+        elif in_load_weights and re.match(r'\s*def\s+', line):
+            in_load_weights = False  # entered a different method
+
+        if in_load_weights and SKIP_NEEDLE in line and SKIP_MARKER not in line:
+            return i
+    return None
+
+
+def skip_apply(path: Path) -> bool:
+    text = path.read_text()
+    if SKIP_MARKER in text:
+        return False
+
+    lines = text.splitlines(keepends=True)
+    idx = _find_skip_needle_idx(lines)
+
+    if idx is None:
+        sys.exit(
+            f"Cannot find '{SKIP_NEEDLE}' inside load_weights in {path}.\n"
+            "The vLLM version may have restructured load_weights. "
+            "Check llama.py manually."
+        )
+
+    # Match indentation of the target line
+    m = re.match(r'(\s*)', lines[idx])
+    indent = m.group(1) if m else "        "
+
+    guard_line = f"{indent}if name not in params_dict: continue  # {SKIP_MARKER}\n"
+    lines.insert(idx, guard_line)
+    path.write_text("".join(lines))
+    return True
+
+
+def skip_remove(path: Path) -> bool:
+    text = path.read_text()
+    if SKIP_MARKER not in text:
+        return False
+    lines = [l for l in text.splitlines(keepends=True) if SKIP_MARKER not in l]
+    path.write_text("".join(lines))
+    return True
+
+
+def skip_present(path: Path) -> bool:
+    return SKIP_MARKER in path.read_text()
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Patch vLLM for BambooForCausalLM")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--check", action="store_true", help="Verify both patches are present")
-    group.add_argument("--undo",  action="store_true", help="Remove both patches")
+    group.add_argument("--check", action="store_true", help="Verify all patches are present")
+    group.add_argument("--undo",  action="store_true", help="Remove all patches")
     args = parser.parse_args()
 
     root     = find_vllm_root()
@@ -213,24 +294,30 @@ def main():
     if args.check:
         ok1 = registry_present(registry)
         ok2 = relu_present(llama)
-        print(f"  Patch 1 (registry BambooForCausalLM) : {'✔ present' if ok1 else '✘ missing'}")
-        print(f"  Patch 2 (llama.py relu support)      : {'✔ present' if ok2 else '✘ missing'}")
-        if not (ok1 and ok2):
+        ok3 = skip_present(llama)
+        print(f"  Patch 1 (registry BambooForCausalLM)    : {'✔ present' if ok1 else '✘ missing'}")
+        print(f"  Patch 2 (llama.py relu support)         : {'✔ present' if ok2 else '✘ missing'}")
+        print(f"  Patch 3 (llama.py skip unknown weights) : {'✔ present' if ok3 else '✘ missing'}")
+        if not (ok1 and ok2 and ok3):
             sys.exit(1)
 
     elif args.undo:
         r1 = registry_remove(registry)
         r2 = relu_remove(llama)
-        print(f"  Patch 1 (registry) : {'removed' if r1 else 'was not applied'}")
-        print(f"  Patch 2 (llama.py) : {'removed' if r2 else 'was not applied'}")
+        r3 = skip_remove(llama)
+        print(f"  Patch 1 (registry)              : {'removed' if r1 else 'was not applied'}")
+        print(f"  Patch 2 (llama.py relu)         : {'removed' if r2 else 'was not applied'}")
+        print(f"  Patch 3 (llama.py skip weights) : {'removed' if r3 else 'was not applied'}")
 
     else:
         r1 = registry_apply(registry)
         r2 = relu_apply(llama)
-        print(f"  Patch 1 (registry BambooForCausalLM) : {'applied' if r1 else 'already present'}")
-        print(f"  Patch 2 (llama.py relu support)      : {'applied' if r2 else 'already present'}")
-        if not r1 and not r2:
-            print("Nothing to do — both patches already applied.")
+        r3 = skip_apply(llama)
+        print(f"  Patch 1 (registry BambooForCausalLM)    : {'applied' if r1 else 'already present'}")
+        print(f"  Patch 2 (llama.py relu support)         : {'applied' if r2 else 'already present'}")
+        print(f"  Patch 3 (llama.py skip unknown weights) : {'applied' if r3 else 'already present'}")
+        if not r1 and not r2 and not r3:
+            print("Nothing to do — all patches already applied.")
 
 
 if __name__ == "__main__":
