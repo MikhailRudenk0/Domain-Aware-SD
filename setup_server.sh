@@ -43,6 +43,10 @@ if $INSTALL_GPU; then
         "vllm>=0.4.0" \
         "deepspeed>=0.14.0"
     ok "vLLM + DeepSpeed installed"
+
+    log "Patching vLLM registry for BambooForCausalLM (TurboSparse-Mistral)"
+    conda run -n "$ENV_NAME" python "$SCRIPT_DIR/patch_vllm.py"
+    ok "vLLM registry patched"
 else
     warn "Skipping GPU packages (--no-gpu)"
 fi

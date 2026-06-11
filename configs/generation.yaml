@@ -1,8 +1,12 @@
 # Hydra config for synthetic data generation
-# Run: python src/generate_synthetic_data.py
+# Run from the project root: python src/generate_synthetic_data.py
+#
+# IMPORTANT: all paths must be relative to the project root.
+# Never use absolute paths here — this config is committed to git and
+# must work on any machine without modification.
 
 model:
-  path: /Users/mike/projects/Domain-Aware-SD/TurboSparse-Mistral-Instruct
+  path: TurboSparse-Mistral-Instruct
   trust_remote_code: true
   dtype: bfloat16
   # vLLM tensor parallelism (number of GPUs)
@@ -10,7 +14,7 @@ model:
   gpu_memory_utilization: 0.90
 
 data:
-  flan_dir: /Users/mike/projects/Domain-Aware-SD/flan
+  flan_dir: flan
   split: train
   # Max samples to process per cluster (null = all)
   max_samples_per_cluster: 500
@@ -31,7 +35,7 @@ generation:
   batch_size: 32
 
 output:
-  dir: /Users/mike/projects/Domain-Aware-SD/data/synthetic
+  dir: data/synthetic
   version: v1
   # Save raw logits in addition to probs
   save_logprobs: false
