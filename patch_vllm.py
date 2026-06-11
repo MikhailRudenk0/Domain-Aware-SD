@@ -220,43 +220,36 @@ def relu_present(path: Path) -> bool:
 # also contains "load_weights" nearby, to avoid hitting any other dict lookup
 # that happens to use the same variable names.
 
-def _find_skip_needle_idx(lines: list[str]) -> int | None:
-    """Return index of `param = params_dict[name]` inside load_weights."""
-    in_load_weights = False
-    for i, line in enumerate(lines):
-        # Track whether we're inside the load_weights method
-        if re.search(r'def\s+load_weights\b', line):
-            in_load_weights = True
-        elif in_load_weights and re.match(r'\s*def\s+', line):
-            in_load_weights = False  # entered a different method
-
-        if in_load_weights and SKIP_NEEDLE in line and SKIP_MARKER not in line:
-            return i
-    return None
-
-
 def skip_apply(path: Path) -> bool:
     text = path.read_text()
     if SKIP_MARKER in text:
         return False
 
-    lines = text.splitlines(keepends=True)
-    idx = _find_skip_needle_idx(lines)
-
-    if idx is None:
+    if SKIP_NEEDLE not in text:
         sys.exit(
-            f"Cannot find '{SKIP_NEEDLE}' inside load_weights in {path}.\n"
-            "The vLLM version may have restructured load_weights. "
+            f"Cannot find '{SKIP_NEEDLE}' in {path}.\n"
+            "The vLLM version may have restructured weight loading. "
             "Check llama.py manually."
         )
 
-    # Match indentation of the target line
-    m = re.match(r'(\s*)', lines[idx])
-    indent = m.group(1) if m else "        "
+    # Guard every occurrence of `param = params_dict[name]` in the file.
+    # vLLM 0.22+ has multiple load_weights methods (one per submodule class);
+    # the Bamboo predictor weights can surface in any of them, so we patch all.
+    lines = text.splitlines(keepends=True)
+    result = []
+    patched = 0
+    for line in lines:
+        if SKIP_NEEDLE in line and SKIP_MARKER not in line:
+            m = re.match(r'(\s*)', line)
+            indent = m.group(1) if m else "        "
+            result.append(f"{indent}if name not in params_dict: continue  # {SKIP_MARKER}\n")
+            patched += 1
+        result.append(line)
 
-    guard_line = f"{indent}if name not in params_dict: continue  # {SKIP_MARKER}\n"
-    lines.insert(idx, guard_line)
-    path.write_text("".join(lines))
+    if patched == 0:
+        return False
+
+    path.write_text("".join(result))
     return True
 
 
