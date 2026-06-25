@@ -108,7 +108,16 @@ def batch_prompts(samples: list[dict], batch_size: int):
 
 def build_vllm_engine(cfg: DictConfig):
     """Initialize vLLM LLM engine from config."""
+    import os
     from vllm import LLM
+
+    # flashinfer's sampling kernel requires nvcc for JIT compilation.
+    # If nvcc is missing (common when CUDA is installed via conda or a
+    # non-standard path), disable the flashinfer sampler so vLLM falls back
+    # to its built-in PyTorch sampler instead of crashing.
+    import shutil
+    if not shutil.which("nvcc"):
+        os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 
     return LLM(
         model=cfg.model.path,
@@ -131,6 +140,22 @@ def build_sampling_params(cfg: DictConfig):
     )
 
 
+def _vllm_max_model_len(llm, default: int = 32768) -> int:
+    """Best-effort lookup of the engine's max_model_len across vLLM versions."""
+    for attr_path in (
+        ("llm_engine", "model_config", "max_model_len"),
+        ("llm_engine", "vllm_config", "model_config", "max_model_len"),
+    ):
+        obj = llm
+        try:
+            for a in attr_path:
+                obj = getattr(obj, a)
+            return int(obj)
+        except AttributeError:
+            continue
+    return default
+
+
 def generate_cluster_vllm(
     llm,
     sampling_params,
@@ -141,6 +166,21 @@ def generate_cluster_vllm(
     """Generate synthetic data for one cluster using vLLM."""
     results = []
     batch_size = cfg.generation.batch_size
+
+    # Drop prompts that won't fit in the model's context. vLLM raises
+    # VLLMValidationError mid-batch otherwise, killing the whole run.
+    max_model_len = _vllm_max_model_len(llm)
+    max_prompt_tokens = max_model_len - cfg.generation.max_new_tokens - 16
+    tokenizer = llm.get_tokenizer()
+    kept, skipped = [], 0
+    for s in samples:
+        if len(tokenizer.encode(s["inputs"])) <= max_prompt_tokens:
+            kept.append(s)
+        else:
+            skipped += 1
+    if skipped:
+        print(f"  Skipped {skipped}/{len(samples)} samples over {max_prompt_tokens} prompt tokens")
+    samples = kept
 
     for batch_start, batch in batch_prompts(samples, batch_size):
         prompts = [s["inputs"] for s in batch]
