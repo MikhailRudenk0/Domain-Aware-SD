@@ -8,7 +8,7 @@ from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 import torch
 from torch.utils.data import Dataset, Subset
 
-from .utils import build_index, detect_format, walk_jsonl
+from .utils import build_index, detect_format, walk_data_files
 
 _MODE = Literal["distillation", "standard"]
 
@@ -63,8 +63,9 @@ class SpecDecDataset(Dataset):
             kept_r, kept_c = [], []
             for r, c in zip(records, cluster_labels):
                 fmt = detect_format(r)
-                if fmt == "synthetic" and r.get("top10"):
-                    top1_probs = [pos[0]["prob"] for pos in r["top10"] if pos]
+                if fmt == "synthetic":
+                    probs_rows = r.get("top10_probs") or []
+                    top1_probs = [row[0] for row in probs_rows if row]
                     if top1_probs and (sum(top1_probs) / len(top1_probs)) < min_top1_prob:
                         continue
                 kept_r.append(r)
@@ -84,10 +85,10 @@ class SpecDecDataset(Dataset):
 
     @classmethod
     def from_dir(cls, root: Union[str, Path], **kwargs) -> "SpecDecDataset":
-        """Walk root recursively, collect all *.jsonl files, return a dataset."""
-        paths = walk_jsonl(root)
+        """Walk root recursively, collect all *.jsonl and *.npz files, return a dataset."""
+        paths = walk_data_files(root)
         if not paths:
-            raise FileNotFoundError(f"No *.jsonl files found under {root}")
+            raise FileNotFoundError(f"No *.jsonl or *.npz files found under {root}")
         return cls(paths, **kwargs)
 
     # ------------------------------------------------------------------
@@ -102,7 +103,10 @@ class SpecDecDataset(Dataset):
         cluster = self._clusters[idx]
         fmt = detect_format(record)
 
-        # Build prompt_ids, trunk_ids, and top10 per format
+        # Build prompt_ids, trunk_ids, and top-K rows per format
+        top10_ids_rows: List[List[int]] = []
+        top10_probs_rows: List[List[float]] = []
+
         if fmt == "synthetic":
             prompt_ids = self.tokenizer.encode(
                 record["prompt"],
@@ -111,7 +115,8 @@ class SpecDecDataset(Dataset):
                 max_length=self.max_length - 1,
             )
             trunk_ids: List[int] = record["trunk"]
-            top10 = record.get("top10", [])
+            top10_ids_rows = record.get("top10_ids", []) or []
+            top10_probs_rows = record.get("top10_probs", []) or []
 
         elif fmt == "flan":
             prompt_ids = self.tokenizer.encode(
@@ -124,7 +129,6 @@ class SpecDecDataset(Dataset):
                 record["targets"],
                 add_special_tokens=False,
             )
-            top10 = []
 
         else:  # plain — whole text is one causal sequence, no separate prompt
             trunk_ids = self.tokenizer.encode(
@@ -134,12 +138,12 @@ class SpecDecDataset(Dataset):
                 max_length=self.max_length,
             )
             prompt_ids = []
-            top10 = []
 
         # Truncate trunk to fit within max_length and max_gen_length
         available = self.max_length - len(prompt_ids)
         trunk_ids = trunk_ids[: min(available, self.max_gen_length)]
-        top10 = top10[: len(trunk_ids)]
+        top10_ids_rows = top10_ids_rows[: len(trunk_ids)]
+        top10_probs_rows = top10_probs_rows[: len(trunk_ids)]
 
         gen_start = len(prompt_ids)
         full_ids = prompt_ids + trunk_ids
@@ -164,17 +168,17 @@ class SpecDecDataset(Dataset):
             "cluster": cluster,
         }
 
-        if self.mode == "distillation" and top10:
+        if self.mode == "distillation" and any(top10_ids_rows):
             n = 10
             ids_list, probs_list = [], []
-            for pos in top10:
-                entries = pos[:n]
-                pos_ids = [e["token_id"] for e in entries]
-                pos_probs = [round(e["prob"], 3) for e in entries]
-                # Pad to exactly n if the position has fewer than 10 candidates
+            for i in range(len(trunk_ids)):
+                pos_ids = top10_ids_rows[i] if i < len(top10_ids_rows) else []
+                pos_probs = top10_probs_rows[i] if i < len(top10_probs_rows) else []
+                pos_ids = list(pos_ids)[:n]
+                pos_probs = [round(float(p), 3) for p in pos_probs][:n]
                 pad = n - len(pos_ids)
                 pos_ids += [0] * pad
-                pos_probs += [0.0] * pad
+                pos_probs += [0.0] * (n - len(pos_probs))
                 ids_list.append(pos_ids)
                 probs_list.append(pos_probs)
 
@@ -252,10 +256,10 @@ class SpecDecDataset(Dataset):
             fmt = detect_format(rec)
             if fmt == "synthetic":
                 gen_lens.append(len(rec.get("trunk", [])))
-                positions = rec.get("top10", [])
-                if positions:
-                    mean_p = sum(pos[0]["prob"] for pos in positions if pos) / len(positions)
-                    top1_probs.append(mean_p)
+                probs_rows = rec.get("top10_probs") or []
+                top1_per_pos = [row[0] for row in probs_rows if row]
+                if top1_per_pos:
+                    top1_probs.append(sum(top1_per_pos) / len(top1_per_pos))
 
         result: dict = {
             "total_samples": len(self._records),

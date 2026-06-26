@@ -6,16 +6,24 @@ For each of 66 flan clusters, generates text completions and captures
 top-10 token probabilities at each generation step. This data trains
 domain-specific draft models for speculative decoding.
 
-Output format per sample (JSONL):
+Output schema (JSONL — one record per line):
 {
-  "cluster":  "aeslc_10templates",
-  "prompt":   "...",
-  "trunk":    [tok_id_0, tok_id_1, ...],      # sampled sequence (top-1 at each step)
-  "top10":    [                                # one entry per generated position
-    [{"token_id": X, "prob": Y, "token": "..."},  ...],   # 10 entries sorted by prob desc
-    ...
-  ]
+  "cluster":     "aeslc_10templates",
+  "prompt":      "...",
+  "reference":   "...",
+  "trunk":       [tok_id_0, tok_id_1, ...],        # sampled sequence
+  "top10_ids":   [[id_0_0, ..., id_0_9], ...],     # one row per generated position
+  "top10_probs": [[p_0_0,  ..., p_0_9 ], ...]      # rounded to 3 d.p.
 }
+
+Rows in top10_ids/top10_probs are aligned with trunk: position i corresponds to
+trunk[i]. A skipped row (empty list []) means top-K was not captured at that
+position — either because logprobs=0 (normal mode) or because the top-1 prob
+exceeded skip_top10_above_prob.
+
+When output.format=npz, the same fields are written as a compact binary numpy
+archive (uint16 ids, uint16 quantized probs ×1000) — readable transparently
+by SpecDecDataset.
 
 Usage:
     python src/generate_synthetic_data.py
@@ -78,21 +86,31 @@ def cluster_name(jsonl_path: Path) -> str:
     return name
 
 
-def logprobs_to_top10(logprobs_at_position: dict) -> list[dict]:
+def logprobs_to_topk(
+    logprobs_at_position: dict,
+    k: int,
+    skip_above_prob: float = 1.0,
+) -> tuple[list[int], list[float]]:
     """
-    Convert vLLM logprobs dict at one position to sorted top-10 list.
+    Convert vLLM logprobs at one generated position to parallel (ids, probs) arrays.
 
-    vLLM logprobs format: {token_id: Logprob(logprob=float, rank=int, decoded_token=str)}
+    vLLM logprobs format: {token_id: Logprob(logprob=float, rank=int, decoded_token=str)}.
+    Returned arrays are sorted by probability descending and truncated to k.
+    If the top-1 prob > skip_above_prob, returns ([], []) — caller should record
+    this as a skipped position so trunk and top10 stay aligned.
     """
-    import math
-    entries = []
+    entries: list[tuple[int, float]] = []
     for token_id, lp_obj in logprobs_at_position.items():
         logprob = lp_obj.logprob if hasattr(lp_obj, "logprob") else lp_obj
         prob = math.exp(logprob)
-        token_str = lp_obj.decoded_token if hasattr(lp_obj, "decoded_token") else ""
-        entries.append({"token_id": int(token_id), "prob": round(prob, 3), "token": token_str})
-    entries.sort(key=lambda x: x["prob"], reverse=True)
-    return entries[:10]
+        entries.append((int(token_id), round(prob, 3)))
+    entries.sort(key=lambda x: x[1], reverse=True)
+    entries = entries[:k]
+    if entries and entries[0][1] > skip_above_prob:
+        return [], []
+    ids = [e[0] for e in entries]
+    probs = [e[1] for e in entries]
+    return ids, probs
 
 
 def batch_prompts(samples: list[dict], batch_size: int):
@@ -100,6 +118,115 @@ def batch_prompts(samples: list[dict], batch_size: int):
     for i in range(0, len(samples), batch_size):
         batch = samples[i : i + batch_size]
         yield i, batch
+
+
+# ---------------------------------------------------------------------------
+# Writers
+# ---------------------------------------------------------------------------
+
+def write_jsonl(records: list[dict], path: Path) -> None:
+    with open(path, "w") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def write_npz(records: list[dict], path: Path) -> None:
+    """
+    Pack a cluster's records into a compact .npz archive.
+
+    Layout (all arrays cluster-wide):
+      prompts        object [N]          UTF-8 strings
+      references     object [N]
+      cluster        scalar str
+      trunk_lens     int32  [N]          length of each sample's trunk
+      trunk_ids      uint16 [sum lens]   concatenated trunk token IDs
+      top10_ids      uint16 [sum lens, K] zeros at skipped/normal positions
+      top10_probs_q  uint16 [sum lens, K] prob × 1000; zeros at skipped positions
+      top10_mask     bool   [sum lens]   True where top-K was captured
+      top_k          scalar uint8        K (10 by default; 0 in normal mode)
+
+    Empty cluster (no records) → still writes the file but with N=0.
+    """
+    import numpy as np
+
+    if not records:
+        np.savez_compressed(path, prompts=np.array([], dtype=object))
+        return
+
+    cluster = records[0]["cluster"]
+    prompts = np.array([r["prompt"] for r in records], dtype=object)
+    references = np.array([r.get("reference", "") for r in records], dtype=object)
+
+    trunk_lens = np.array([len(r["trunk"]) for r in records], dtype=np.int32)
+    trunk_ids = np.fromiter(
+        (tid for r in records for tid in r["trunk"]),
+        dtype=np.uint16,
+        count=int(trunk_lens.sum()),
+    )
+
+    # Infer K from the first non-empty top10 row across all records.
+    k = 0
+    for r in records:
+        for row in r.get("top10_ids", []):
+            if row:
+                k = len(row)
+                break
+        if k:
+            break
+
+    total = int(trunk_lens.sum())
+    if k > 0 and total > 0:
+        top10_ids = np.zeros((total, k), dtype=np.uint16)
+        top10_probs_q = np.zeros((total, k), dtype=np.uint16)
+        top10_mask = np.zeros(total, dtype=bool)
+        offset = 0
+        for r in records:
+            ids_rows = r.get("top10_ids", [])
+            probs_rows = r.get("top10_probs", [])
+            for i in range(len(r["trunk"])):
+                pos_ids = ids_rows[i] if i < len(ids_rows) else []
+                pos_probs = probs_rows[i] if i < len(probs_rows) else []
+                if pos_ids:
+                    n = min(len(pos_ids), k)
+                    top10_ids[offset + i, :n] = pos_ids[:n]
+                    # quantize probs to uint16 in [0, 1000]
+                    top10_probs_q[offset + i, :n] = [
+                        max(0, min(1000, int(round(p * 1000)))) for p in pos_probs[:n]
+                    ]
+                    top10_mask[offset + i] = True
+            offset += len(r["trunk"])
+    else:
+        # normal mode (k == 0) — still write empty arrays so the reader has a
+        # consistent schema.
+        top10_ids = np.zeros((total, 0), dtype=np.uint16)
+        top10_probs_q = np.zeros((total, 0), dtype=np.uint16)
+        top10_mask = np.zeros(total, dtype=bool)
+
+    np.savez_compressed(
+        path,
+        cluster=np.array(cluster),
+        prompts=prompts,
+        references=references,
+        trunk_lens=trunk_lens,
+        trunk_ids=trunk_ids,
+        top10_ids=top10_ids,
+        top10_probs_q=top10_probs_q,
+        top10_mask=top10_mask,
+        top_k=np.uint8(k),
+    )
+
+
+def write_cluster(records: list[dict], out_dir: Path, cname: str, fmt: str) -> Path:
+    """Dispatch to the configured writer; return the path written."""
+    if fmt == "jsonl":
+        path = out_dir / f"{cname}.jsonl"
+        write_jsonl(records, path)
+    elif fmt == "npz":
+        path = out_dir / f"{cname}.npz"
+        write_npz(records, path)
+    else:
+        raise ValueError(f"Unknown output.format: {fmt!r} (expected 'jsonl' or 'npz')")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +259,13 @@ def build_sampling_params(cfg: DictConfig):
     """Build vLLM SamplingParams from config."""
     from vllm import SamplingParams
 
+    # logprobs=0 (or null) → normal mode: don't request top-K from vLLM at all.
+    k = cfg.generation.logprobs
     return SamplingParams(
         max_tokens=cfg.generation.max_new_tokens,
         temperature=cfg.generation.temperature,
         top_p=cfg.generation.top_p,
-        logprobs=cfg.generation.logprobs,  # capture top-k logprobs per step
+        logprobs=k if k else None,
     )
 
 
@@ -182,6 +311,9 @@ def generate_cluster_vllm(
         print(f"  Skipped {skipped}/{len(samples)} samples over {max_prompt_tokens} prompt tokens")
     samples = kept
 
+    k = cfg.generation.logprobs or 0
+    skip_above = float(cfg.generation.skip_top10_above_prob)
+
     for batch_start, batch in batch_prompts(samples, batch_size):
         prompts = [s["inputs"] for s in batch]
         print(f"    Batch {batch_start // batch_size + 1}: {len(prompts)} prompts")
@@ -193,17 +325,21 @@ def generate_cluster_vllm(
                 continue
             out = output.outputs[0]
 
-            top10_per_pos = []
-            if out.logprobs:
+            top10_ids: list[list[int]] = []
+            top10_probs: list[list[float]] = []
+            if k and out.logprobs:
                 for pos_logprobs in out.logprobs:
-                    top10_per_pos.append(logprobs_to_top10(pos_logprobs))
+                    ids, probs = logprobs_to_topk(pos_logprobs, k, skip_above)
+                    top10_ids.append(ids)
+                    top10_probs.append(probs)
 
             results.append({
                 "cluster": cluster,
                 "prompt": sample["inputs"],
                 "reference": sample.get("targets", ""),
                 "trunk": list(out.token_ids),
-                "top10": top10_per_pos,
+                "top10_ids": top10_ids,
+                "top10_probs": top10_probs,
             })
 
     return results
@@ -229,6 +365,8 @@ def generate_cluster_transformers(
 
     results = []
     batch_size = min(cfg.generation.batch_size, 4)  # conservative for CPU/MPS
+    k = cfg.generation.logprobs or 0
+    skip_above = float(cfg.generation.skip_top10_above_prob)
 
     for batch_start, batch in batch_prompts(samples, batch_size):
         prompts = [s["inputs"] for s in batch]
@@ -250,40 +388,37 @@ def generate_cluster_transformers(
                 temperature=cfg.generation.temperature,
                 top_p=cfg.generation.top_p,
                 return_dict_in_generate=True,
-                output_scores=True,  # logits at each step
+                output_scores=bool(k),  # only request logits when top-K is wanted
             )
 
-        # gen_out.scores: tuple of (batch, vocab) tensors, one per generated step
-        sequences = gen_out.sequences  # (batch, prompt_len + gen_len)
-        scores = gen_out.scores        # tuple of (batch, vocab)
-
+        sequences = gen_out.sequences                       # (batch, prompt_len + gen_len)
+        scores = gen_out.scores if k else None              # tuple of (batch, vocab)
         prompt_len = inputs["input_ids"].shape[1]
 
         for b_idx, sample in enumerate(batch):
             generated_ids = sequences[b_idx, prompt_len:].tolist()
-            top10_per_pos = []
+            top10_ids: list[list[int]] = []
+            top10_probs: list[list[float]] = []
 
-            for step, step_scores in enumerate(scores):
-                logits = step_scores[b_idx]
-                # Convert logits → probabilities
-                probs = torch.softmax(logits, dim=-1)
-                top_probs, top_ids = torch.topk(probs, k=10)
-                top10_at_step = [
-                    {
-                        "token_id": int(top_ids[k]),
-                        "prob": round(float(top_probs[k]), 3),
-                        "token": tokenizer.decode([top_ids[k]]),
-                    }
-                    for k in range(10)
-                ]
-                top10_per_pos.append(top10_at_step)
+            if k and scores is not None:
+                for step_scores in scores:
+                    probs = torch.softmax(step_scores[b_idx], dim=-1)
+                    top_probs, top_ids = torch.topk(probs, k=k)
+                    top1 = round(float(top_probs[0]), 3)
+                    if top1 > skip_above:
+                        top10_ids.append([])
+                        top10_probs.append([])
+                    else:
+                        top10_ids.append([int(t) for t in top_ids.tolist()])
+                        top10_probs.append([round(float(p), 3) for p in top_probs.tolist()])
 
             results.append({
                 "cluster": cluster,
                 "prompt": sample["inputs"],
                 "reference": sample.get("targets", ""),
                 "trunk": generated_ids,
-                "top10": top10_per_pos,
+                "top10_ids": top10_ids,
+                "top10_probs": top10_probs,
             })
 
     return results
@@ -361,12 +496,12 @@ def main(cfg: DictConfig):
             print("HuggingFace model loaded.")
 
         # Process each cluster
+        out_fmt = cfg.output.format
         total_samples = 0
         for cluster_file in cluster_files:
             cname = cluster_name(cluster_file)
-            out_file = out_dir / f"{cname}.jsonl"
-
-            if out_file.exists():
+            # Skip if either format is already present — same cluster, same version.
+            if (out_dir / f"{cname}.jsonl").exists() or (out_dir / f"{cname}.npz").exists():
                 print(f"\n[SKIP] {cname} — output already exists")
                 continue
 
@@ -386,10 +521,7 @@ def main(cfg: DictConfig):
                     hf_model, hf_tokenizer, samples, cname, cfg, device
                 )
 
-            with open(out_file, "w") as f:
-                for r in results:
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
+            out_file = write_cluster(results, out_dir, cname, out_fmt)
             total_samples += len(results)
             print(f"  Saved {len(results)} samples → {out_file}")
             mlflow.log_metric("clusters_done", cluster_files.index(cluster_file) + 1)
@@ -416,7 +548,8 @@ def _upload_to_s3(out_dir: Path, cfg: DictConfig):
     bucket = cfg.s3.bucket
     prefix = f"{cfg.s3.prefix}/{cfg.output.version}"
 
-    for f in sorted(out_dir.glob("*.jsonl")):
+    files = sorted(list(out_dir.glob("*.jsonl")) + list(out_dir.glob("*.npz")))
+    for f in files:
         key = f"{prefix}/{f.name}"
         size_mb = f.stat().st_size / (1024 ** 2)
         print(f"  {f.name} ({size_mb:.1f} MB) → s3://{bucket}/{key}")

@@ -40,14 +40,20 @@ class DistillationCollator:
             "cluster": [item["cluster"] for item in batch],
         }
 
-        if "top10_ids" in batch[0]:
-            max_gen_len = max(item["top10_ids"].size(0) for item in batch)
+        # Distillation tensors are emitted if ANY item in the batch carries them.
+        # Items without (e.g. normal-mode samples mixed in) are zero-padded — this
+        # yields a zero distillation loss on those rows, which is what we want.
+        items_with_top10 = [item for item in batch if "top10_ids" in item]
+        if items_with_top10:
+            max_gen_len = max(item["top10_ids"].size(0) for item in items_with_top10)
             n = 10  # always 10 candidates per position
 
             ids_padded = torch.zeros(len(batch), max_gen_len, n, dtype=torch.long)
             probs_padded = torch.zeros(len(batch), max_gen_len, n, dtype=torch.float32)
 
             for i, item in enumerate(batch):
+                if "top10_ids" not in item:
+                    continue
                 gl = item["top10_ids"].size(0)
                 ids_padded[i, :gl] = item["top10_ids"]
                 probs_padded[i, :gl] = item["top10_probs"]

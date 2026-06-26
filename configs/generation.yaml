@@ -23,8 +23,17 @@ data:
   shuffle_seed: 42
 
 generation:
-  # Top-k for logprobs capture (1 trunk + 9 alternatives)
+  # Top-k for logprobs capture (1 trunk + k-1 alternatives).
+  # Set to 0 (or null) to disable top-K capture entirely — "normal mode".
+  # In normal mode only the trunk token IDs are saved; useful for plain LM
+  # fine-tuning where the distillation signal is not needed.
   logprobs: 10
+  # Skip top-K capture at positions where top-1 prob exceeds this threshold.
+  # 1.0 (default) → never skip; e.g. 0.95 → drop top-K wherever the target
+  # is already very confident. Saves space, no signal loss for the drafter
+  # at "easy" positions. Skipped positions are still recorded (as empty
+  # entries), so trunk/labels stay aligned.
+  skip_top10_above_prob: 1.0
   # Generation params
   max_new_tokens: 256
   temperature: 1.0
@@ -37,8 +46,11 @@ generation:
 output:
   dir: data/synthetic
   version: v1
-  # Save raw logits in addition to probs
-  save_logprobs: false
+  # Storage format:
+  #   jsonl — human-readable JSON Lines (recommended for validation/test splits)
+  #   npz   — compact binary numpy archive (recommended for train split)
+  # Both formats are read transparently by SpecDecDataset.
+  format: jsonl
 
 s3:
   bucket: domain-aware-sd
