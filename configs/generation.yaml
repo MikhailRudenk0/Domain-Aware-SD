@@ -17,7 +17,7 @@ data:
   flan_dir: flan
   split: train
   # Max samples to process per cluster (null = all)
-  max_samples_per_cluster: 500
+  max_samples_per_cluster: 50000
   # Shuffle before sampling
   shuffle: true
   shuffle_seed: 42
@@ -41,7 +41,7 @@ generation:
   # Stop on EOS
   stop_on_eos: true
   # Batch size for vLLM
-  batch_size: 32
+  batch_size: 4096
 
 output:
   dir: data/synthetic
@@ -55,7 +55,7 @@ output:
 s3:
   bucket: domain-aware-sd
   prefix: data/synthetic
-  upload_after_generation: false
+  upload_after_generation: true
 
 mlflow:
   experiment_name: synthetic_data_generation
