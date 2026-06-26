@@ -12,8 +12,11 @@ Download:
     python src/download_from_s3.py --all --force          # re-download even if exists
 
 Upload:
-    python src/download_from_s3.py --upload-flan          # upload flan/ → S3
-    python src/download_from_s3.py --upload-flan --force  # re-upload even if key exists
+    python src/download_from_s3.py --upload-flan                # upload flan/ → S3
+    python src/download_from_s3.py --upload-flan --force        # re-upload even if key exists
+    python src/download_from_s3.py --upload-data                # upload data/synthetic/v1 → S3
+    python src/download_from_s3.py --upload-data --version v2   # upload a specific version
+    python src/download_from_s3.py --upload-data --force        # re-upload even if key exists
 
 Common:
     --workers N   parallel threads (default: 8)
@@ -193,6 +196,8 @@ def main():
     # Upload flags
     ul = parser.add_argument_group("upload")
     ul.add_argument("--upload-flan", action="store_true", help="Upload flan/ directory to S3")
+    ul.add_argument("--upload-data", action="store_true",
+                    help="Upload data/synthetic/<version> directory to S3 (use --version to pick)")
 
     # Common
     parser.add_argument("--force",   action="store_true", help="Re-transfer even if file already exists")
@@ -200,7 +205,8 @@ def main():
 
     args = parser.parse_args()
 
-    any_action = any([args.all, args.models, args.data, args.flan, args.upload_flan])
+    any_action = any([args.all, args.models, args.data, args.flan,
+                      args.upload_flan, args.upload_data])
     if not any_action:
         parser.print_help()
         sys.exit(1)
@@ -212,6 +218,14 @@ def main():
         print(f"\n── Upload flan → s3://{BUCKET}/{FLAN_S3_PREFIX} ──────────────────")
         upload_dir(client, FLAN_LOCAL_DIR, FLAN_S3_PREFIX,
                    force=args.force, workers=args.workers, label="flan")
+
+    # ── Upload: synthetic data ────────────────────────────────────────────────
+    if args.upload_data:
+        prefix    = f"data/synthetic/{args.version}"
+        local_dir = PROJECT_ROOT / "data" / "synthetic" / args.version
+        print(f"\n── Upload synthetic data → s3://{BUCKET}/{prefix} ──────────────────")
+        upload_dir(client, local_dir, prefix,
+                   force=args.force, workers=args.workers, label=f"data/{args.version}")
 
     # ── Download: models ──────────────────────────────────────────────────────
     if args.all or args.models:
