@@ -27,6 +27,8 @@ from typing import List, Optional
 import numpy as np
 import torch
 
+from src.eval._torch_utils import resolve_dtype
+
 
 @dataclass
 class TargetInfo:
@@ -95,7 +97,7 @@ class ModelTargetProvider:
     ) -> None:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        torch_dtype = getattr(torch, dtype)
+        torch_dtype = resolve_dtype(dtype, device)
         self.tokenizer = AutoTokenizer.from_pretrained(
             str(model_dir), trust_remote_code=trust_remote_code
         )

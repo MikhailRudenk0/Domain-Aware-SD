@@ -15,8 +15,8 @@ Km is fixed (``topk_K`` from config). Kt is per-position (length of the
 ``target_topk_ids`` provided to this call).
 
 Implementation uses HuggingFace ``transformers`` with a single batched forward
-pass. vLLM-based acceleration can be added later as a drop-in replacement; the
-output struct stays the same.
+pass — vLLM is intentionally not used here (it is reserved for the data-gen
+pipeline only).
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ from typing import List, Optional
 
 import numpy as np
 import torch
+
+from src.eval._torch_utils import resolve_dtype
 
 
 @dataclass
@@ -48,7 +50,7 @@ class DraftRunner:
     ) -> None:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        torch_dtype = getattr(torch, dtype)
+        torch_dtype = resolve_dtype(dtype, device)
         self.tokenizer = AutoTokenizer.from_pretrained(
             str(model_dir), trust_remote_code=trust_remote_code
         )

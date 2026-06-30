@@ -89,7 +89,7 @@ def main(cfg: DictConfig) -> None:
         runner = DraftRunner(
             model_dir=d,
             device=cfg.device,
-            dtype=cfg.engine.dtype,
+            dtype=cfg.dtype,
             topk_K=cfg.topk_K,
             trust_remote_code=False,
         )
@@ -105,7 +105,7 @@ def main(cfg: DictConfig) -> None:
         target_provider = ModelTargetProvider(
             model_dir=target_dir,
             device=cfg.device,
-            dtype=cfg.target.dtype,
+            dtype=cfg.dtype,
             trust_remote_code=cfg.target.trust_remote_code,
             topk_K=cfg.topk_K,
         )

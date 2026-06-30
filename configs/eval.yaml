@@ -13,7 +13,6 @@ draft_models:
 target:
   path: TurboSparse-Mistral-Instruct
   trust_remote_code: true
-  dtype: bfloat16
 
 s3:
   bucket: domain-aware-sd
@@ -33,15 +32,12 @@ n_positions: 100
 
 batch_size: 8
 max_samples_per_file: null    # null = use all samples
-device: cuda                  # cuda | cpu | mps
 
-engine:
-  use_vllm: true              # falls back to transformers on import error
-  gpu_memory_utilization: 0.85
-  dtype: bfloat16
-  # Number of top draft logprobs to pull from vLLM. Should be >= dataset's K
-  # so that we can read draft's probability at every target top-K id.
-  prompt_logprobs_k: 64
+# Inference is done with HuggingFace transformers (no vLLM here — vLLM is used
+# only by the data-generation pipeline). On Mac use device=mps + dtype=float16
+# for the local-test workflow; bfloat16 is silently downgraded to float16 on MPS.
+device: cuda                  # cuda | cpu | mps
+dtype: bfloat16               # bfloat16 | float16 | float32
 
 # Metrics to compute (any subset). overlap_area is the canonical proxy for
 # the SD acceptance rate (overlap_area == 1 - TVD == E[accept] under perfect
