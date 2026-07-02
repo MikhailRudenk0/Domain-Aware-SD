@@ -1,0 +1,60 @@
+# Hydra config for the "acceptance bar" visualization.
+# Run from the project root:
+#   python src/viz/acceptance_bar.py
+#
+# Behavior: scan input_dir, find eval-pipeline JSONs, group per (dataset,
+# series), plot one grouped bar chart with overlaid decreasing-width bars.
+
+input_dir: eval_results
+
+# Filter which aggregation types to plot. null = all present in files.
+# Examples: ["single"], ["best"], ["best", "arithmetic_average"].
+aggregations: null
+
+# Metric to plot on the y-axis (must match a metric emitted by the eval).
+metric: overlap_area
+
+# Which trunk position(s) to plot:
+#   int              → single position, 0-indexed (e.g. 0 = "first 1 token").
+#   [start, end]     → inclusive range, averaged (e.g. [0, 9] = "first 10").
+position: 0
+
+# X-axis ordering of datasets. value_asc | value_desc | name_asc | name_desc.
+sort_by: value_asc
+
+# Optional label overrides applied on top of auto-derived series labels.
+# Keys are the draft_tag from metadata (single-draft name or "a+b" joined
+# names for multi-draft). Values are the display labels shown in the legend.
+# Example:
+#   labels:
+#     tiny-mixtral: baseline
+#     sft-v1: sft (general)
+labels: {}
+
+# Explicit legend order. Empty = alphabetical. Any series not listed here
+# are appended alphabetically after the listed ones.
+series_order: []
+
+bars:
+  # Widths per series (widest drawn first / behind, narrowest last / in front).
+  # If fewer widths than series, remaining widths shrink geometrically.
+  widths: [0.8, 0.5, 0.3, 0.2]
+  alpha: 0.85
+
+# Per-bar annotation: value | sample_count | none
+annotate: value
+
+# Info block bottom-left of the chart: summary | none
+info_box: summary
+
+figure:
+  width: 20
+  height: 6
+  dpi: 120
+
+# Chart title. null → auto ("<metric> per dataset (<position>)").
+title: null
+
+output:
+  dir: viz_results
+  filename: null    # null → auto ("bar__<metric>__pos<p>.png")
