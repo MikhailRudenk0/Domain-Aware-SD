@@ -163,7 +163,8 @@ def main(cfg: DictConfig) -> None:
             print(
                 f"  processed {result.n_samples_total} samples; "
                 f"skipped positions total: {sum(result.n_skipped_per_position)}; "
-                f"special-target positions total: {sum(result.n_special_target_per_position)}"
+                f"special-target positions total: {sum(result.n_special_target_per_position)}; "
+                f"samples with OOB in trunk: {result.n_samples_with_oob_in_trunk}"
             )
 
             aggs_used = ["single"] if len(draft_runners) == 1 else list(cfg.aggregations)
@@ -177,6 +178,7 @@ def main(cfg: DictConfig) -> None:
                 n_samples_per_position=result.n_samples_per_position,
                 n_skipped_per_position=result.n_skipped_per_position,
                 n_special_target_per_position=result.n_special_target_per_position,
+                n_samples_with_oob_in_trunk=result.n_samples_with_oob_in_trunk,
                 top_k_from_dataset=top_k_from_dataset,
                 target_renormalized=True,
                 metrics=list(cfg.metrics),

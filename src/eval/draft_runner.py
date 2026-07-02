@@ -78,8 +78,20 @@ class DraftRunner:
         Returns a list of length B; element b is a list of length
         ``min(n_positions, trunk_lens[b])`` of per-position info.
         """
+        # Target-side trunks may contain ids >= draft vocab (chat special tokens
+        # like <|im_end|> emitted by the target). The draft's embedding table
+        # cannot look those up, so clamp them to 0 to keep the forward alive.
+        # The evaluator is responsible for masking metrics at positions whose
+        # context has been clamped (see first_oob_in_trunk in evaluator.py).
+        input_ids_safe = input_ids
+        if (input_ids >= self.vocab_size).any():
+            input_ids_safe = torch.where(
+                input_ids < self.vocab_size,
+                input_ids,
+                torch.zeros_like(input_ids),
+            )
         logits = self.model(
-            input_ids=input_ids.to(self.device),
+            input_ids=input_ids_safe.to(self.device),
             attention_mask=attention_mask.to(self.device),
         ).logits  # [B, L, V_draft]
 

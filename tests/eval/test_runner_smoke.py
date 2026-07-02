@@ -264,6 +264,57 @@ def test_smoke_multi_model_aggregations(tokenizer, tmp_path: Path):
         assert v == pytest.approx(1.0)
 
 
+def test_oob_trunk_token_truncates_evaluation(tokenizer, tmp_path: Path):
+    """A trunk token >= draft_vocab_size at position k should cause all
+    positions p > k to be dropped from the metric (context corrupted).
+    Position k itself is caught by the special-target check anyway."""
+    path = tmp_path / "with_oob.jsonl"
+    K = 10
+    with path.open("w") as f:
+        # 2 records; trunk[2] is OOB (id 32050 >= draft_vocab 32000).
+        for i in range(2):
+            top10_ids = [
+                list(range(100, 100 + K)),
+                list(range(100, 100 + K)),
+                [32050] + list(range(100, 100 + K - 1)),   # OOB is target's top-1
+                list(range(100, 100 + K)),
+                list(range(100, 100 + K)),
+            ]
+            top10_probs = [[round(1.0 / K, 3)] * K for _ in range(5)]
+            rec = {
+                "cluster": "c",
+                "prompt": f"p {i}",
+                "reference": "r",
+                "trunk": [200, 201, 32050, 203, 204],
+                "top10_ids": top10_ids,
+                "top10_probs": top10_probs,
+            }
+            f.write(json.dumps(rec) + "\n")
+
+    dataset = SpecDecDataset(
+        path, tokenizer, mode="distillation",
+        max_length=512, max_gen_length=5,
+    )
+    result = evaluate_dataset(
+        dataset=dataset,
+        draft_runners=[StubDraftRunner(K=10)],
+        target_provider=DatasetTargetProvider(),
+        n_positions=5,
+        batch_size=2,
+        pad_token_id=tokenizer.pad_token_id,
+        metrics=["overlap_area"],
+        aggregations=[],
+        mode_label_str="top10_from_dataset",
+        draft_vocab_size=32000,
+    )
+    # Positions 0, 1: both samples evaluated
+    # Position 2: caught by special-target (target's top-1 is 32050 >= 32000)
+    # Positions 3, 4: context is corrupted (trunk[2] OOB) → truncated
+    assert result.n_samples_per_position == [2, 2, 0, 0, 0]
+    assert result.n_special_target_per_position[2] == 2
+    assert result.n_samples_with_oob_in_trunk == 2
+
+
 def test_skipped_positions_are_masked(tokenizer, tmp_path: Path):
     """Records with all-zero top10_probs at some positions should mask those
     positions out of the average and bump the skipped counter."""

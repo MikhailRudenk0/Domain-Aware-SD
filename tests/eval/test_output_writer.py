@@ -69,6 +69,7 @@ def test_write_eval_json_roundtrip(tmp_path: Path):
         n_samples_per_position=[5, 5, 4],
         n_skipped_per_position=[0, 0, 1],
         n_special_target_per_position=[0, 0, 0],
+        n_samples_with_oob_in_trunk=0,
         top_k_from_dataset=10,
         target_renormalized=True,
         metrics=["overlap_area"],

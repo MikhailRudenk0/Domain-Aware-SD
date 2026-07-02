@@ -71,6 +71,7 @@ class EvalMetadata:
     n_samples_per_position: List[int]
     n_skipped_per_position: List[int]
     n_special_target_per_position: List[int]
+    n_samples_with_oob_in_trunk: int
     top_k_from_dataset: Optional[int]
     target_renormalized: bool
     metrics: List[str]

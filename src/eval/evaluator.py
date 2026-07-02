@@ -186,6 +186,25 @@ class EvalLoopResult:
     n_samples_per_position: List[int]
     n_skipped_per_position: List[int]
     n_special_target_per_position: List[int]
+    n_samples_with_oob_in_trunk: int  # samples whose first_N trunk had ≥1 OOB id
+
+
+def _first_oob_in_trunk(
+    trunk_ids: torch.Tensor,   # 1-D, the trunk portion of a sample's input_ids
+    n_positions: int,
+    draft_vocab_size: int,
+) -> int:
+    """Return the smallest trunk index k in [0, min(n_positions, len)) such that
+    ``trunk_ids[k] >= draft_vocab_size``, or the effective length if none."""
+    limit = min(n_positions, int(trunk_ids.shape[0]))
+    if limit == 0:
+        return 0
+    window = trunk_ids[:limit]
+    oob_mask = window >= draft_vocab_size
+    nz = torch.nonzero(oob_mask, as_tuple=False)
+    if nz.numel() == 0:
+        return limit
+    return int(nz[0].item())
 
 
 def evaluate_dataset(
@@ -223,6 +242,7 @@ def evaluate_dataset(
     n_samples_per_position = np.zeros(n_positions, dtype=np.int64)
     n_skipped_per_position = np.zeros(n_positions, dtype=np.int64)
     n_special_target_per_position = np.zeros(n_positions, dtype=np.int64)
+    n_samples_with_oob_in_trunk = 0
 
     total = len(dataset) if max_samples is None else min(len(dataset), max_samples)
 
@@ -268,7 +288,22 @@ def evaluate_dataset(
         # Per (sample, position): bookkeeping + metric accumulation
         for b in range(len(samples)):
             n_samples_total += 1
-            valid_positions = min(n_positions, batch.trunk_lens[b], len(target_infos_per_sample[b]))
+            # If any trunk token in the evaluated window is out of the draft's
+            # vocabulary, positions after it use corrupted context — cut the
+            # evaluation window to first_oob (inclusive; the OOB position itself
+            # is caught by the special-target check below).
+            trunk_slice = batch.input_ids[
+                b, batch.gen_starts[b]: batch.gen_starts[b] + batch.trunk_lens[b]
+            ]
+            first_oob = _first_oob_in_trunk(trunk_slice, n_positions, draft_vocab_size)
+            if first_oob < min(n_positions, batch.trunk_lens[b]):
+                n_samples_with_oob_in_trunk += 1
+            valid_positions = min(
+                n_positions,
+                batch.trunk_lens[b],
+                len(target_infos_per_sample[b]),
+                first_oob + 1,
+            )
             for p in range(valid_positions):
                 ti = target_infos_per_sample[b][p]
                 if ti.is_skipped:
@@ -296,4 +331,5 @@ def evaluate_dataset(
         n_samples_per_position=n_samples_per_position.tolist(),
         n_skipped_per_position=n_skipped_per_position.tolist(),
         n_special_target_per_position=n_special_target_per_position.tolist(),
+        n_samples_with_oob_in_trunk=n_samples_with_oob_in_trunk,
     )
