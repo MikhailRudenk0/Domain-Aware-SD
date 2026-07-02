@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data import SpecDecDataset  # noqa: E402
+from src.data.utils import walk_data_files  # noqa: E402
 from src.eval import mlflow_logger  # noqa: E402
 from src.eval.draft_runner import DraftRunner  # noqa: E402
 from src.eval.evaluator import evaluate_dataset  # noqa: E402
@@ -116,11 +117,28 @@ def main(cfg: DictConfig) -> None:
     output_dir = _resolve_path(cfg.output.dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Expand any directory entries in cfg.datasets into all *.jsonl / *.npz
+    # files inside them (recursively). File entries pass through unchanged.
+    expanded_datasets: List[Path] = []
     for ds_path_str in cfg.datasets:
-        ds_path = _resolve_path(ds_path_str)
-        if not ds_path.exists():
-            print(f"  [skip] dataset not found: {ds_path}")
+        p = _resolve_path(ds_path_str)
+        if not p.exists():
+            print(f"  [skip] path not found: {p}")
             continue
+        if p.is_dir():
+            files = walk_data_files(p)
+            if not files:
+                print(f"  [skip] no *.jsonl / *.npz under directory: {p}")
+                continue
+            print(f"  [expand] {p} → {len(files)} file(s)")
+            expanded_datasets.extend(files)
+        else:
+            expanded_datasets.append(p)
+
+    if not expanded_datasets:
+        sys.exit("No datasets to evaluate.")
+
+    for ds_path in expanded_datasets:
         print(f"\n── Evaluating on {ds_path} ──")
 
         dataset = SpecDecDataset(
@@ -172,7 +190,7 @@ def main(cfg: DictConfig) -> None:
                 draft_models=list(cfg.draft_models),
                 target_model=cfg.target.path,
                 target_source=target_source,
-                dataset=str(ds_path_str),
+                dataset=str(ds_path),
                 n_positions=cfg.n_positions,
                 n_samples_total=result.n_samples_total,
                 n_samples_per_position=result.n_samples_per_position,
@@ -188,7 +206,7 @@ def main(cfg: DictConfig) -> None:
             out_path = write_eval_json(
                 output_dir,
                 list(cfg.draft_models),
-                str(ds_path_str),
+                str(ds_path),
                 metadata,
                 result.results,
             )

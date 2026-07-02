@@ -19,7 +19,12 @@ s3:
   models_prefix: models
 
 datasets:
-  - data/synthetic/v1/aeslc_10templates.jsonl
+  # Each entry is either a file (*.jsonl / *.npz) or a directory. Directory
+  # entries are recursively expanded into all *.jsonl and *.npz files inside.
+  # Examples:
+  #   - data/validation/v1/aeslc_10templates.jsonl
+  #   - data/validation/v1                       # all clusters in that dir
+  - data/validation/v1/aeslc_10templates.jsonl
 
 # "dataset" — use top-K from the synthetic dataset (cheap, K = whatever was
 # captured during generation, typically 10).
