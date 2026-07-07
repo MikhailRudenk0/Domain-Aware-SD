@@ -8,7 +8,7 @@ draft_models:
   #   1. PROJECT_ROOT/<name>  (local)
   #   2. s3://<s3.bucket>/<s3.models_prefix>/<name>/  (download then use local)
   #   3. error
-  - tiny-mixtral
+  - Lite-Mistral-150M-v2-Instruct
 
 target:
   path: TurboSparse-Mistral-Instruct
@@ -24,7 +24,7 @@ datasets:
   # Examples:
   #   - data/validation/v1/aeslc_10templates.jsonl
   #   - data/validation/v1                       # all clusters in that dir
-  - data/validation/v1/aeslc_10templates.jsonl
+  - data/validation/v1
 
 # "dataset" — use top-K from the synthetic dataset (cheap, K = whatever was
 # captured during generation, typically 10).
@@ -33,16 +33,16 @@ datasets:
 target_source: dataset
 
 # Number of trunk positions to evaluate per sample.
-n_positions: 100
+n_positions: 50
 
-batch_size: 8
+batch_size: 4
 max_samples_per_file: null    # null = use all samples
 
 # Inference is done with HuggingFace transformers (no vLLM here — vLLM is used
 # only by the data-generation pipeline). On Mac use device=mps + dtype=float16
 # for the local-test workflow; bfloat16 is silently downgraded to float16 on MPS.
-device: cuda                  # cuda | cpu | mps
-dtype: bfloat16               # bfloat16 | float16 | float32
+device: mps                   # cuda | cpu | mps
+dtype: float16                # bfloat16 | float16 | float32
 
 # Metrics to compute (any subset). overlap_area is the canonical proxy for
 # the SD acceptance rate (overlap_area == 1 - TVD == E[accept] under perfect

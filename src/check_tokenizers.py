@@ -34,6 +34,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 TARGET_MODEL = PROJECT_ROOT / "TurboSparse-Mistral-Instruct"
 DRAFT_CANDIDATES = [
     PROJECT_ROOT / "tiny-mixtral",
+    PROJECT_ROOT / "Lite-Mistral-150M-v2-Instruct",
     PROJECT_ROOT / "flant5-tuned-30",
     PROJECT_ROOT / "t5-small-finetuned",
 ]
