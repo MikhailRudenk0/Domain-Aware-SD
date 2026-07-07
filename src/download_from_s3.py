@@ -43,8 +43,8 @@ ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
 SECRET_KEY = os.getenv("S3_SECRET_KEY")
 
 MODELS = {
-    "target":  ("models/TurboSparse-Mistral-Instruct", PROJECT_ROOT / "TurboSparse-Mistral-Instruct"),
-    "drafter": ("models/tiny-mixtral",                 PROJECT_ROOT / "tiny-mixtral"),
+    "target":  ("models/TurboSparse-Mistral-Instruct",   PROJECT_ROOT / "TurboSparse-Mistral-Instruct"),
+    "drafter": ("models/Lite-Mistral-150M-v2-Instruct",  PROJECT_ROOT / "Lite-Mistral-150M-v2-Instruct"),
 }
 
 FLAN_S3_PREFIX = "flan"
