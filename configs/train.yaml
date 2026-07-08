@@ -1,0 +1,60 @@
+# Hydra config for drafter fine-tuning.
+# Run from the project root: python src/train_drafter.py
+#
+# IMPORTANT: all paths must be relative to the project root.
+
+model:
+  # Drafter checkpoint. Any tokenizer-compatible causal LM works
+  # (tiny-mixtral, Lite-Mistral-150M-v2-Instruct, ...).
+  path: tiny-mixtral
+  dtype: bfloat16          # bfloat16 | float16 | float32
+  trust_remote_code: false
+
+data:
+  # Directory holding synthetic *.jsonl / *.npz produced by generate_synthetic_data.py.
+  synthetic_dir: data/synthetic/v1
+  # Path to a JSON file with a list of cluster names to train on
+  # (e.g. ["aeslc_10templates", "cnn_dailymail_10templates", ...]).
+  # A single-run job trains ONE drafter on the union of these clusters.
+  clusters_json: configs/clusters/all.json
+  max_length: 512
+  max_gen_length: 256
+  # Drop samples whose mean top-1 target prob is below this (null = keep all).
+  min_top1_prob: null
+  # Stratified per-cluster val split cut out of the loaded data.
+  val_fraction: 0.05
+  seed: 42
+
+training:
+  loss:
+    # ce | distillation | mixed
+    mode: distillation
+    # For mixed: total = ce_weight * ce + (1 - ce_weight) * kd
+    ce_weight: 0.5
+    # Softmax temperature applied to the drafter's logits before KD.
+    # 1.0 = plain soft cross-entropy against target's top-10 distribution.
+    temperature: 1.0
+
+  output_dir: outputs/drafter
+  num_train_epochs: 3
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  lr_scheduler_type: cosine
+  logging_steps: 20
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 3
+  bf16: true
+  fp16: false
+  gradient_checkpointing: false
+  dataloader_num_workers: 2
+  seed: 42
+
+mlflow:
+  tracking_uri: ./mlruns
+  experiment_name: drafter_training
+  run_name: null
