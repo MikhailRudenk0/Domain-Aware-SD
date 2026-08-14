@@ -1,0 +1,95 @@
+# Reference Acceptance Rate per Cluster (first 100 tokens)
+# Source: results/ar_per_cluster_first100_tokens.jpg (old experiment)
+# Model: SFT (general) vs Baseline (untrained Lite-Mistral-150M-v2-Instruct)
+# Target: TurboSparse-Mistral-Instruct
+# Metric: overlap_area (1 - TVD)
+#
+# Summary statistics:
+#   SFT mean=0.713, std=0.146
+#   Baseline mean=0.480, std=0.159
+#
+# Values read from chart (approximate, sorted by SFT value ascending):
+# Format: cluster_name | SFT_value | baseline_value | task_type
+#
+# NOTE: The chart title says "Acceptance Rate per Cluster (first 100 tokens)"
+# This means overlap_area averaged over positions 0-99.
+#
+# Clusters sorted left-to-right (ascending by SFT value):
+
+cluster_wmt16_translate_csen    | ~0.33 | ~0.30 | Text Reformulation
+cluster_wmt16_translate_ruen    | ~0.35 | ~0.32 | Text Reformulation
+cluster_wmt16_translate_fien    | ~0.38 | ~0.34 | Text Reformulation
+cluster_wmt16_translate_deen    | ~0.40 | ~0.34 | Text Reformulation
+cluster_wmt14_translate_fren    | ~0.40 | ~0.34 | Text Reformulation
+cluster_wmt16_translate_roen    | ~0.42 | ~0.36 | Text Reformulation
+cluster_wmt16_translate_tren    | ~0.42 | ~0.36 | Text Reformulation
+cluster_para_crawl_enes         | ~0.43 | ~0.38 | Text Reformulation
+cluster_craw_samsum             | ~0.44 | ~0.38 | Content Generation
+cluster_wiki_lingua_english_en  | ~0.46 | ~0.40 | Content Generation
+cluster_natural_questions       | ~0.48 | ~0.42 | Reasoning
+cluster_opinion_abstracts_rotten| ~0.50 | ~0.40 | Content Generation
+cluster_opinion_abstracts_idebate| ~0.52 | ~0.42 | Content Generation
+cluster_rotten_tomatoes         | ~0.54 | ~0.42 | Content Generation
+cluster_story_cloze             | ~0.56 | ~0.44 | Reasoning
+cluster_cnn_dailymail           | ~0.58 | ~0.44 | Content Generation
+cluster_sentiment140            | ~0.60 | ~0.43 | Understanding
+cluster_common_gen              | ~0.60 | ~0.44 | Content Generation
+cluster_ag_news_subset          | ~0.62 | ~0.46 | Understanding
+cluster_gigaword                | ~0.62 | ~0.44 | Content Generation
+cluster_multi_news              | ~0.63 | ~0.46 | Content Generation
+cluster_imdb_reviews            | ~0.63 | ~0.46 | Understanding
+cluster_word_segment            | ~0.64 | ~0.50 | Text Reformulation
+cluster_word_stsb               | ~0.64 | ~0.48 | Understanding
+cluster_multirc                 | ~0.64 | ~0.50 | Reasoning
+cluster_drop                    | ~0.66 | ~0.52 | Reasoning
+cluster_arc_challenge           | ~0.66 | ~0.54 | Reasoning
+cluster_openbookqa              | ~0.66 | ~0.54 | Reasoning
+cluster_cosmos_qa               | ~0.68 | ~0.52 | Reasoning
+cluster_quac                    | ~0.68 | ~0.54 | Understanding
+cluster_yelp_polarity_reviews   | ~0.70 | ~0.56 | Understanding
+cluster_definite_pronoun_res    | ~0.70 | ~0.58 | Reasoning
+cluster_true_case               | ~0.72 | ~0.58 | Text Reformulation
+cluster_record                  | ~0.72 | ~0.56 | Reasoning
+cluster_web_nlg_en              | ~0.72 | ~0.56 | Content Generation
+cluster_coqa                    | ~0.72 | ~0.58 | Reasoning
+cluster_squad_v1                | ~0.74 | ~0.58 | Reasoning
+cluster_squad_v2                | ~0.74 | ~0.58 | Reasoning
+cluster_e2e_nlg                 | ~0.74 | ~0.58 | Content Generation
+cluster_piqa                    | ~0.74 | ~0.60 | Reasoning
+cluster_dart                    | ~0.74 | ~0.58 | Content Generation
+cluster_hellaswag               | ~0.76 | ~0.60 | Reasoning
+cluster_copa                    | ~0.76 | ~0.58 | Reasoning
+cluster_anli_r3                 | ~0.76 | ~0.60 | Reasoning
+cluster_anli_r1                 | ~0.76 | ~0.62 | Reasoning
+cluster_anli_r2                 | ~0.78 | ~0.62 | Reasoning
+cluster_cb                      | ~0.78 | ~0.58 | Reasoning
+cluster_snli                    | ~0.78 | ~0.64 | Understanding
+cluster_fix_punct               | ~0.78 | ~0.64 | Text Reformulation
+cluster_arc_easy                | ~0.78 | ~0.64 | Reasoning
+cluster_glue_qqp                | ~0.80 | ~0.66 | Understanding
+cluster_glue_mrpc               | ~0.80 | ~0.66 | Understanding
+cluster_aeslc                   | ~0.80 | ~0.64 | Content Generation
+cluster_trivia_qa               | ~0.80 | ~0.62 | Reasoning
+cluster_bool_q                  | ~0.82 | ~0.66 | Understanding
+cluster_paws_wiki               | ~0.82 | ~0.68 | Understanding
+cluster_sst2                    | ~0.82 | ~0.68 | Understanding
+cluster_math_dataset            | ~0.84 | ~0.70 | Reasoning
+cluster_trec                    | ~0.84 | ~0.72 | Understanding
+cluster_true_case_dlg           | ~0.84 | ~0.72 | Text Reformulation
+cluster_record_v2               | ~0.84 | ~0.72 | Reasoning
+cluster_paws_wiki_v2            | ~0.86 | ~0.74 | Understanding
+cluster_wic                     | ~0.86 | ~0.72 | Understanding
+cluster_mnli_mismatched         | ~0.86 | ~0.72 | Understanding
+cluster_mnli_matched            | ~0.86 | ~0.72 | Understanding
+cluster_qnli                    | ~0.86 | ~0.72 | Understanding
+cluster_rte                     | ~0.86 | ~0.74 | Understanding
+cluster_cola                    | ~0.88 | ~0.76 | Understanding
+cluster_wnli                    | ~0.88 | ~0.76 | Understanding
+cluster_wsc                     | ~0.88 | ~0.76 | Understanding
+
+# KEY OBSERVATION:
+# The BASELINE (untrained model) values range from ~0.30 to ~0.76
+# The SFT (general) values range from ~0.33 to ~0.88
+# The gap (SFT - baseline) is roughly 0.03-0.16 across clusters
+# Translation clusters have the lowest AR for both models
+# Understanding/classification clusters have the highest AR
