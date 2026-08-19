@@ -101,11 +101,19 @@ class ModelTargetProvider:
         self.tokenizer = AutoTokenizer.from_pretrained(
             str(model_dir), trust_remote_code=trust_remote_code
         )
-        self.model = AutoModelForCausalLM.from_pretrained(
+        model = AutoModelForCausalLM.from_pretrained(
             str(model_dir),
             trust_remote_code=trust_remote_code,
             torch_dtype=torch_dtype,
-        ).to(device).eval()
+        )
+        # transformers>=5 does not materialize the non-persistent rotary buffers
+        # of remote-code models (TurboSparse/Bamboo), which silently breaks RoPE.
+        # See src/repro/bamboo_fix.py for the diagnosis.
+        from src.repro.bamboo_fix import fix_rotary
+        n_fixed = fix_rotary(model)
+        if n_fixed:
+            print(f"[target_provider] repaired {n_fixed} rotary modules")
+        self.model = model.to(device).eval()
         self.device = device
         self.topk_K = topk_K
 

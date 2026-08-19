@@ -1,0 +1,77 @@
+# Reference Acceptance Rate per Cluster — FIRST 1 TOKEN (position 0)
+# Source: results/ar_per_cluster_first1_token.jpg (old experiment, SFT drafter is lost)
+# Extraction: pixel analysis of bar heights, geometric y-axis calibration (0.0 -> y=141, 1.0 -> y=26).
+# Validation: extracted stats  baseline mean=0.368 std=0.187 | sft mean=0.802 std=0.147
+#             chart annotation baseline mean=0.373 std=0.181 | sft mean=0.809 std=0.151
+#             -> extraction error is about +/-0.02 per bar.
+# Order below = left-to-right on the chart (ascending by SFT value).
+# The last three bars (e2e_nlg, anli_r1, wic) are partially occluded by the legend box -> LOW CONFIDENCE.
+#
+# cluster | sft | baseline
+
+wmt16_translate_ruen                   | 0.443 | 0.200
+wmt16_translate_csen                   | 0.461 | 0.243
+wmt16_translate_fien                   | 0.470 | 0.135
+wmt16_translate_tren                   | 0.470 | 0.278
+wmt16_translate_deen                   | 0.478 | 0.143
+wmt16_translate_roen                   | 0.504 | 0.252
+wmt14_enfr                             | 0.583 | 0.304
+para_crawl_enes                        | 0.583 | 0.139
+multi_news                             | 0.643 | 0.452
+gigaword                               | 0.652 | 0.417
+common_gen                             | 0.670 | 0.296
+natural_questions                      | 0.670 | 0.426
+wiki_lingua_english_en                 | 0.678 | 0.400
+trivia_qa                              | 0.687 | 0.487
+stsb                                   | 0.696 | 0.165
+aeslc                                  | 0.704 | 0.313
+copa                                   | 0.704 | 0.374
+hellaswag                              | 0.713 | 0.417
+word_segment                           | 0.739 | 0.304
+samsum                                 | 0.739 | 0.391
+cnn_dailymail                          | 0.774 | 0.513
+cosmos_qa                              | 0.774 | 0.470
+quac                                   | 0.791 | 0.452
+record                                 | 0.809 | 0.557
+drop                                   | 0.809 | 0.609
+arc_challenge                          | 0.809 | 0.496
+openbookqa                             | 0.809 | 0.487
+definite_pronoun_resolution            | 0.826 | 0.365
+cola                                   | 0.835 | 0.417
+story_cloze                            | 0.835 | 0.470
+squad_v1                               | 0.835 | 0.574
+opinion_abstracts_idebate              | 0.843 | 0.365
+squad_v2                               | 0.843 | 0.639
+true_case                              | 0.852 | 0.435
+opinion_abstracts_rotten_tomatoes      | 0.852 | 0.496
+arc_easy                               | 0.852 | 0.496
+bool_q                                 | 0.843 | 0.122
+ag_news_subset                         | 0.857 | 0.365
+wsc                                    | 0.887 | 0.078
+fix_punct                              | 0.896 | 0.583
+web_nlg_en                             | 0.887 | 0.643
+imdb_reviews                           | 0.887 | 0.200
+piqa                                   | 0.896 | 0.487
+multirc                                | 0.896 | 0.183
+dart                                   | 0.904 | 0.661
+sentiment140                           | 0.904 | 0.252
+math_dataset                           | 0.904 | 0.496
+sst2                                   | 0.913 | 0.130
+paws_wiki                              | 0.930 | 0.087
+wnli                                   | 0.922 | 0.096
+snli                                   | 0.926 | 0.443
+yelp_polarity_reviews                  | 0.939 | 0.217
+glue_mrpc                              | 0.948 | 0.070
+cb                                     | 0.948 | 0.174
+mnli_mismatched                        | 0.948 | 0.383
+rte                                    | 0.948 | 0.113
+glue_qqp                               | 0.957 | 0.043
+trec                                   | 0.957 | 0.243
+mnli_matched                           | 0.957 | 0.374
+anli_r2                                | 0.974 | 0.426
+coqa                                   | 0.974 | 0.487
+qnli                                   | 0.965 | 0.130
+anli_r3                                | 0.974 | 0.443
+e2e_nlg                                | 0.983 | 0.904   # low-confidence (legend occlusion)
+anli_r1                                | 0.878 | 0.826   # low-confidence (legend occlusion)
+wic                                    | 0.678 | 0.661   # low-confidence (legend occlusion)

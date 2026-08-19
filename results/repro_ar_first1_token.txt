@@ -1,0 +1,74 @@
+# Reproduced baseline AR per cluster (first-token experiment)
+# Best-MAE config: prompt=plain_nl, pos=mean0..7, metric=overlap_full, T_target=2.0, T_draft=0.7, top_p=1.0
+# Scores vs reference (63 confident clusters): MAE=0.106 RMSE=0.148 pearson=0.654 spearman=0.690
+# Aggregate: reproduced mean=0.385 std=0.178 | reference mean=0.373 std=0.181
+# Alt best-correlation config: pos=mean0..7 T=1.5/0.5 top_p=0.95 -> r=0.713 MAE=0.133
+#
+# cluster | reproduced | reference | diff
+
+glue_qqp                               | 0.046 | 0.043 | +0.003
+glue_mrpc                              | 0.041 | 0.070 | -0.029
+wsc                                    | 0.016 | 0.078 | -0.062
+paws_wiki                              | 0.088 | 0.087 | +0.001
+wnli                                   | 0.007 | 0.096 | -0.089
+rte                                    | 0.339 | 0.113 | +0.226
+bool_q                                 | 0.094 | 0.122 | -0.028
+sst2                                   | 0.232 | 0.130 | +0.102
+qnli                                   | 0.259 | 0.130 | +0.129
+wmt16_translate_fien                   | 0.251 | 0.135 | +0.116
+para_crawl_enes                        | 0.296 | 0.139 | +0.157
+wmt16_translate_deen                   | 0.260 | 0.143 | +0.117
+stsb                                   | 0.348 | 0.165 | +0.183
+cb                                     | 0.456 | 0.174 | +0.282
+multirc                                | 0.389 | 0.183 | +0.206
+wmt16_translate_ruen                   | 0.244 | 0.200 | +0.044
+imdb_reviews                           | 0.255 | 0.200 | +0.055
+yelp_polarity_reviews                  | 0.277 | 0.217 | +0.060
+wmt16_translate_csen                   | 0.219 | 0.243 | -0.024
+trec                                   | 0.370 | 0.243 | +0.127
+wmt16_translate_roen                   | 0.255 | 0.252 | +0.003
+sentiment140                           | 0.206 | 0.252 | -0.046
+wmt16_translate_tren                   | 0.262 | 0.278 | -0.016
+common_gen                             | 0.289 | 0.296 | -0.007
+wmt14_enfr                             | 0.299 | 0.304 | -0.005
+word_segment                           | 0.293 | 0.304 | -0.011
+aeslc                                  | 0.308 | 0.313 | -0.005
+definite_pronoun_resolution            | 0.819 | 0.365 | +0.454
+opinion_abstracts_idebate              | 0.326 | 0.365 | -0.039
+ag_news_subset                         | 0.423 | 0.365 | +0.058
+copa                                   | 0.510 | 0.374 | +0.136
+mnli_matched                           | 0.820 | 0.374 | +0.446
+mnli_mismatched                        | 0.820 | 0.383 | +0.437
+samsum                                 | 0.344 | 0.391 | -0.047
+wiki_lingua_english_en                 | 0.314 | 0.400 | -0.086
+gigaword                               | 0.329 | 0.417 | -0.088
+hellaswag                              | 0.540 | 0.417 | +0.123
+cola                                   | 0.316 | 0.417 | -0.101
+natural_questions                      | 0.384 | 0.426 | -0.042
+anli_r2                                | 0.559 | 0.426 | +0.133
+true_case                              | 0.542 | 0.435 | +0.107
+snli                                   | 0.561 | 0.443 | +0.118
+anli_r3                                | 0.572 | 0.443 | +0.129
+multi_news                             | 0.284 | 0.452 | -0.168
+quac                                   | 0.525 | 0.452 | +0.073
+cosmos_qa                              | 0.526 | 0.470 | +0.056
+story_cloze                            | 0.631 | 0.470 | +0.161
+trivia_qa                              | 0.255 | 0.487 | -0.232
+openbookqa                             | 0.511 | 0.487 | +0.024
+piqa                                   | 0.468 | 0.487 | -0.019
+coqa                                   | 0.459 | 0.487 | -0.028
+arc_challenge                          | 0.500 | 0.496 | +0.004
+opinion_abstracts_rotten_tomatoes      | 0.344 | 0.496 | -0.152
+arc_easy                               | 0.501 | 0.496 | +0.005
+math_dataset                           | 0.341 | 0.496 | -0.155
+cnn_dailymail                          | 0.391 | 0.513 | -0.122
+record                                 | 0.591 | 0.557 | +0.034
+squad_v1                               | 0.559 | 0.574 | -0.015
+fix_punct                              | 0.487 | 0.583 | -0.096
+drop                                   | 0.390 | 0.609 | -0.219
+squad_v2                               | 0.667 | 0.639 | +0.028
+web_nlg_en                             | 0.493 | 0.643 | -0.150
+dart                                   | 0.415 | 0.661 | -0.246
+wic                                    | 0.486 | 0.661 | -0.175
+anli_r1                                | 0.567 | 0.826 | -0.259
+e2e_nlg                                | 0.435 | 0.904 | -0.469
