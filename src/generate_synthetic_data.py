@@ -217,15 +217,28 @@ def write_npz(records: list[dict], path: Path) -> None:
 
 
 def write_cluster(records: list[dict], out_dir: Path, cname: str, fmt: str) -> Path:
-    """Dispatch to the configured writer; return the path written."""
+    """Dispatch to the configured writer; return the path written.
+
+    Writes to a temporary file first and renames atomically, so a killed run
+    never leaves a truncated output that a restart would mistake for a
+    finished cluster.
+    """
     if fmt == "jsonl":
         path = out_dir / f"{cname}.jsonl"
-        write_jsonl(records, path)
+        writer = write_jsonl
     elif fmt == "npz":
         path = out_dir / f"{cname}.npz"
-        write_npz(records, path)
+        writer = write_npz
     else:
         raise ValueError(f"Unknown output.format: {fmt!r} (expected 'jsonl' or 'npz')")
+    tmp = path.with_name(path.name + ".tmp")
+    if fmt == "npz":
+        # pass an open file handle so numpy does not append ".npz" to the name
+        with open(tmp, "wb") as fh:
+            writer(records, fh)
+    else:
+        writer(records, tmp)
+    os.replace(tmp, path)
     return path
 
 
@@ -358,68 +371,136 @@ def generate_cluster_transformers(
     device: str,
 ) -> list[dict]:
     """
-    Fallback generator using HuggingFace transformers.
-    Slower than vLLM but works with custom architectures and without CUDA.
-    """
-    import torch
+    HuggingFace generator with a manual batched sampling loop.
 
-    results = []
-    batch_size = min(cfg.generation.batch_size, 4)  # conservative for CPU/MPS
+    We do NOT use ``model.generate()``: modeling_bamboo.py predates the
+    transformers-5 generation/cache API and its ``prepare_inputs_for_generation``
+    breaks there. A manual loop with an explicit ``DynamicCache``, left padding
+    and explicit ``position_ids`` works correctly with the patched model code.
+
+    Batching: prompts are sorted by token length and grouped under a
+    ``token_budget`` of (prompt + max_new_tokens) tokens per batch, so short
+    prompts run at a large batch size while rare long prompts get small batches
+    instead of blowing up the KV cache.
+
+    Top-K capture uses the raw (temperature=1) softmax distribution, matching
+    what vLLM's ``logprobs`` returned in the original pipeline.
+    """
+    import time
+
+    import torch
+    from transformers.cache_utils import DynamicCache
+
     k = cfg.generation.logprobs or 0
     skip_above = float(cfg.generation.skip_top10_above_prob)
+    temperature = float(cfg.generation.temperature)
+    top_p = float(cfg.generation.top_p)
+    max_new = int(cfg.generation.max_new_tokens)
+    token_budget = int(cfg.generation.get("token_budget", 24000))
+    max_prompt = int(cfg.generation.get("max_prompt_tokens", 4096))
+    eos_id = tokenizer.eos_token_id
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
 
-    for batch_start, batch in batch_prompts(samples, batch_size):
-        prompts = [s["inputs"] for s in batch]
-        print(f"    Batch {batch_start // batch_size + 1}: {len(prompts)} prompts")
+    # Encode all prompts (tokenizer adds BOS); skip the rare over-long ones.
+    encoded, skipped = [], 0
+    for s in samples:
+        ids = tokenizer.encode(s["inputs"])
+        if len(ids) > max_prompt:
+            skipped += 1
+            continue
+        encoded.append((s, ids))
+    if skipped:
+        print(f"  Skipped {skipped}/{len(samples)} prompts over {max_prompt} tokens")
 
-        inputs = tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=512,
-        ).to(device)
+    encoded.sort(key=lambda x: len(x[1]))
+    batches, cur, cur_tokens = [], [], 0
+    for item in encoded:
+        cost = len(item[1]) + max_new
+        if cur and cur_tokens + cost > token_budget:
+            batches.append(cur)
+            cur, cur_tokens = [], 0
+        cur.append(item)
+        cur_tokens += cost
+    if cur:
+        batches.append(cur)
 
+    results = []
+    torch.manual_seed(int(cfg.data.shuffle_seed))
+    t_cluster = time.time()
+    for bi, batch in enumerate(batches):
+        B = len(batch)
+        maxlen = max(len(ids) for _, ids in batch)
+        input_ids = torch.full((B, maxlen), pad_id, dtype=torch.long)
+        attn = torch.zeros((B, maxlen), dtype=torch.long)
+        for i, (_, ids) in enumerate(batch):  # left padding
+            input_ids[i, maxlen - len(ids):] = torch.tensor(ids, dtype=torch.long)
+            attn[i, maxlen - len(ids):] = 1
+        input_ids, attn = input_ids.to(device), attn.to(device)
+        pos = (attn.cumsum(-1) - 1).clamp(min=0)
+
+        cache = DynamicCache()
         with torch.no_grad():
-            gen_out = model.generate(
-                **inputs,
-                max_new_tokens=cfg.generation.max_new_tokens,
-                do_sample=True,
-                temperature=cfg.generation.temperature,
-                top_p=cfg.generation.top_p,
-                return_dict_in_generate=True,
-                output_scores=bool(k),  # only request logits when top-K is wanted
-            )
+            out = model(input_ids=input_ids, attention_mask=attn, position_ids=pos,
+                        past_key_values=cache, use_cache=True)
+        logits = out.logits[:, -1, :]
+        cur_pos = pos[:, -1]
 
-        sequences = gen_out.sequences                       # (batch, prompt_len + gen_len)
-        scores = gen_out.scores if k else None              # tuple of (batch, vocab)
-        prompt_len = inputs["input_ids"].shape[1]
-
-        for b_idx, sample in enumerate(batch):
-            generated_ids = sequences[b_idx, prompt_len:].tolist()
-            top10_ids: list[list[int]] = []
-            top10_probs: list[list[float]] = []
-
-            if k and scores is not None:
-                for step_scores in scores:
-                    probs = torch.softmax(step_scores[b_idx], dim=-1)
-                    top_probs, top_ids = torch.topk(probs, k=k)
-                    top1 = round(float(top_probs[0]), 3)
-                    if top1 > skip_above:
-                        top10_ids.append([])
-                        top10_probs.append([])
+        trunks = [[] for _ in range(B)]
+        tops_i: list[list[list[int]]] = [[] for _ in range(B)]
+        tops_p: list[list[list[float]]] = [[] for _ in range(B)]
+        done = torch.zeros(B, dtype=torch.bool, device=device)
+        for _step in range(max_new):
+            probs = torch.softmax(logits.float(), dim=-1)
+            if k:
+                tp, ti = torch.topk(probs, k=k, dim=-1)
+                tp_cpu, ti_cpu = tp.tolist(), ti.tolist()
+            # sampling distribution: temperature -> top_p -> renormalize
+            sp = torch.softmax(logits.float() / max(temperature, 1e-4), dim=-1)
+            if top_p < 1.0:
+                srt, idx = torch.sort(sp, descending=True, dim=-1)
+                drop = srt.cumsum(-1) - srt > top_p
+                srt = srt.masked_fill(drop, 0.0)
+                nxt = idx.gather(-1, torch.multinomial(srt, 1))
+            else:
+                nxt = torch.multinomial(sp, 1)
+            nxt = torch.where(done.unsqueeze(1), torch.full_like(nxt, pad_id), nxt)
+            nxt_cpu = nxt.squeeze(1).tolist()
+            for i in range(B):
+                if done[i]:
+                    continue
+                trunks[i].append(nxt_cpu[i])
+                if k:
+                    if round(tp_cpu[i][0], 3) > skip_above:
+                        tops_i[i].append([])
+                        tops_p[i].append([])
                     else:
-                        top10_ids.append([int(t) for t in top_ids.tolist()])
-                        top10_probs.append([round(float(p), 3) for p in top_probs.tolist()])
+                        tops_i[i].append([int(t) for t in ti_cpu[i]])
+                        tops_p[i].append([round(float(p), 3) for p in tp_cpu[i]])
+            done = done | (nxt.squeeze(1) == eos_id)
+            if bool(done.all()):
+                break
+            cur_pos = cur_pos + 1
+            # done rows keep receiving pad tokens; their outputs are ignored.
+            attn = torch.cat([attn, torch.ones((B, 1), dtype=attn.dtype, device=device)], dim=1)
+            with torch.no_grad():
+                out = model(input_ids=nxt, attention_mask=attn,
+                            position_ids=cur_pos.unsqueeze(1),
+                            past_key_values=cache, use_cache=True)
+            logits = out.logits[:, -1, :]
 
+        for i, (sample, _ids) in enumerate(batch):
             results.append({
                 "cluster": cluster,
                 "prompt": sample["inputs"],
                 "reference": sample.get("targets", ""),
-                "trunk": generated_ids,
-                "top10_ids": top10_ids,
-                "top10_probs": top10_probs,
+                "trunk": trunks[i],
+                "top10_ids": tops_i[i],
+                "top10_probs": tops_p[i],
             })
+        n_done = sum(len(b) for b in batches[: bi + 1])
+        rate = n_done / max(time.time() - t_cluster, 1e-6)
+        print(f"    Batch {bi + 1}/{len(batches)}: {B} prompts, "
+              f"{n_done}/{len(encoded)} samples, {rate:.1f} samples/s", flush=True)
 
     return results
 
@@ -448,25 +529,38 @@ def main(cfg: DictConfig):
         out_dir = Path(cfg.output.dir) / cfg.output.version
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Try vLLM first, fall back to transformers
-        use_vllm = True
+        # Backend selection.
+        #
+        # Default is "hf": vLLM 0.22 does load BambooForCausalLM, but it does
+        # NOT run the repaired remote code — its output is near-uniform word
+        # salad (the broken-RoPE signature; see results/SYNTHETIC_DATA_VALIDATION.md).
+        # Set model.backend=vllm only after verifying its output by eye.
+        backend = str(cfg.model.get("backend", "hf")).lower()
+        use_vllm = backend in ("vllm", "auto")
         llm = None
         sampling_params = None
         hf_model = None
         hf_tokenizer = None
         device = "cpu"
 
-        try:
-            print("\nLoading model with vLLM...")
-            llm = build_vllm_engine(cfg)
-            sampling_params = build_sampling_params(cfg)
-            print("vLLM engine ready.")
-        except Exception as e:
-            print(f"vLLM unavailable ({e}). Falling back to HuggingFace transformers.")
-            use_vllm = False
+        if use_vllm:
+            try:
+                print("\nLoading model with vLLM...")
+                llm = build_vllm_engine(cfg)
+                sampling_params = build_sampling_params(cfg)
+                print("vLLM engine ready.")
+            except Exception as e:
+                if backend == "vllm":
+                    raise
+                print(f"vLLM unavailable ({e}). Falling back to HuggingFace transformers.")
+                use_vllm = False
 
+        if not use_vllm:
             import torch
             from transformers import AutoTokenizer, AutoModelForCausalLM
+
+            sys.path.insert(0, str(PROJECT_ROOT))
+            from src.repro.bamboo_fix import fix_rotary
 
             device = (
                 "cuda" if torch.cuda.is_available()
@@ -480,6 +574,7 @@ def main(cfg: DictConfig):
             )
             if hf_tokenizer.pad_token is None:
                 hf_tokenizer.pad_token = hf_tokenizer.eos_token
+            hf_tokenizer.padding_side = "left"
 
             torch_dtype = (
                 torch.bfloat16
@@ -489,23 +584,35 @@ def main(cfg: DictConfig):
             hf_model = AutoModelForCausalLM.from_pretrained(
                 cfg.model.path,
                 trust_remote_code=cfg.model.trust_remote_code,
-                torch_dtype=torch_dtype,
-                device_map=device,
+                dtype=torch_dtype,
             )
+            # Repair the RoPE buffers that transformers >= 5 leaves
+            # uninitialized (belt and braces: the patched modeling_bamboo.py
+            # also lazily rebuilds them on first forward).
+            n_fixed = fix_rotary(hf_model)
+            print(f"fix_rotary: repaired {n_fixed} rotary modules")
+            hf_model = hf_model.to(device)
             hf_model.eval()
             print("HuggingFace model loaded.")
+
+        # Optional sharding: run N independent processes (e.g. one per GPU),
+        # each taking clusters where index % num_shards == shard_id.
+        num_shards = int(cfg.data.get("num_shards", 1))
+        shard_id = int(cfg.data.get("shard_id", 0))
 
         # Process each cluster
         out_fmt = cfg.output.format
         total_samples = 0
-        for cluster_file in cluster_files:
+        for cluster_idx, cluster_file in enumerate(cluster_files):
             cname = cluster_name(cluster_file)
+            if cluster_idx % num_shards != shard_id:
+                continue
             # Skip if either format is already present — same cluster, same version.
             if (out_dir / f"{cname}.jsonl").exists() or (out_dir / f"{cname}.npz").exists():
                 print(f"\n[SKIP] {cname} — output already exists")
                 continue
 
-            print(f"\n[{cluster_files.index(cluster_file)+1}/{len(cluster_files)}] Cluster: {cname}")
+            print(f"\n[{cluster_idx+1}/{len(cluster_files)}] Cluster: {cname}", flush=True)
             samples = load_cluster(
                 cluster_file,
                 max_samples=cfg.data.max_samples_per_cluster,
@@ -523,8 +630,8 @@ def main(cfg: DictConfig):
 
             out_file = write_cluster(results, out_dir, cname, out_fmt)
             total_samples += len(results)
-            print(f"  Saved {len(results)} samples → {out_file}")
-            mlflow.log_metric("clusters_done", cluster_files.index(cluster_file) + 1)
+            print(f"  Saved {len(results)} samples → {out_file}", flush=True)
+            mlflow.log_metric("clusters_done", cluster_idx + 1)
 
         mlflow.log_metric("total_samples_generated", total_samples)
         print(f"\nDone. Total samples generated: {total_samples}")

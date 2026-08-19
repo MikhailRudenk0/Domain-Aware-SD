@@ -9,6 +9,12 @@ model:
   path: TurboSparse-Mistral-Instruct
   trust_remote_code: true
   dtype: bfloat16
+  # Inference backend: hf | vllm | auto.
+  # hf is the default: vLLM does load BambooForCausalLM but bypasses the
+  # repaired remote code and produces near-uniform garbage (broken RoPE
+  # signature) — see results/SYNTHETIC_DATA_VALIDATION.md. Only switch to
+  # vllm after verifying its output text by eye.
+  backend: hf
   # vLLM tensor parallelism (number of GPUs)
   tensor_parallel_size: 1
   gpu_memory_utilization: 0.90
@@ -21,6 +27,10 @@ data:
   # Shuffle before sampling
   shuffle: true
   shuffle_seed: 42
+  # Sharding across independent processes (e.g. one per GPU):
+  # process cluster i iff i % num_shards == shard_id
+  num_shards: 1
+  shard_id: 0
 
 generation:
   # Top-k for logprobs capture (1 trunk + k-1 alternatives).
@@ -42,6 +52,11 @@ generation:
   stop_on_eos: true
   # Batch size for vLLM
   batch_size: 4096
+  # HF backend: batch prompts so that sum(prompt_len + max_new_tokens) per
+  # batch stays under this budget (bounds the KV cache on a 24 GB GPU)
+  token_budget: 24000
+  # HF backend: skip prompts longer than this many tokens
+  max_prompt_tokens: 4096
 
 output:
   dir: data/synthetic

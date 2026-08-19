@@ -1,0 +1,116 @@
+--- TurboSparse-Mistral-Instruct/modeling_bamboo.py.orig	2026-08-19 18:22:11.816254303 +0300
++++ TurboSparse-Mistral-Instruct/modeling_bamboo.py	2026-08-19 18:22:32.655247140 +0300
+@@ -593,6 +593,19 @@
+ 
+     def forward(self, x, seq_len=None):
+         # x: [bs, num_attention_heads, seq_len, head_size]
++        # transformers >= 5 loads remote-code models through a meta-device path
++        # that never materializes non-persistent buffers, so inv_freq and the
++        # cos/sin caches computed in __init__ contain uninitialized garbage
++        # after from_pretrained. Rebuild them on first real forward.
++        if not getattr(self, "_rope_materialized", False):
++            inv_freq = 1.0 / (
++                self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device=x.device).float() / self.dim)
++            )
++            self.register_buffer("inv_freq", inv_freq, persistent=False)
++            self._set_cos_sin_cache(
++                seq_len=max(self.max_position_embeddings, seq_len or 0), device=x.device, dtype=x.dtype
++            )
++            self._rope_materialized = True
+         if seq_len > self.max_seq_len_cached:
+             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+ 
+@@ -769,7 +782,11 @@
+                     "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                     "with a layer index."
+                 )
+-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
++            kv_seq_len += (
++                past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
++                if hasattr(past_key_value, "get_usable_length")
++                else past_key_value.get_seq_length(self.layer_idx)
++            )
+         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+ 
+@@ -870,7 +887,11 @@
+                     "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                     "with a layer index."
+                 )
+-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
++            kv_seq_len += (
++                past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
++                if hasattr(past_key_value, "get_usable_length")
++                else past_key_value.get_seq_length(self.layer_idx)
++            )
+ 
+         # Because the input can be padded, the absolute sequence length depends on the max position id.
+         rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item()) + 1
+@@ -1159,7 +1180,11 @@
+ 
+         kv_seq_len = key_states.shape[-2]
+         if past_key_value is not None:
+-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
++            kv_seq_len += (
++                past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
++                if hasattr(past_key_value, "get_usable_length")
++                else past_key_value.get_seq_length(self.layer_idx)
++            )
+         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+ 
+         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+@@ -1470,8 +1495,20 @@
+         if use_cache:
+             use_legacy_cache = not isinstance(past_key_values, Cache)
+             if use_legacy_cache:
+-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+-            past_key_values_length = past_key_values.get_usable_length(seq_length)
++                if past_key_values is None:
++                    past_key_values = DynamicCache()
++                elif hasattr(DynamicCache, "from_legacy_cache"):
++                    past_key_values = DynamicCache.from_legacy_cache(past_key_values)
++                else:
++                    raise ValueError(
++                        "legacy tuple KV cache is not supported by this transformers version; "
++                        "pass a Cache instance instead"
++                    )
++            past_key_values_length = (
++                past_key_values.get_usable_length(seq_length)
++                if hasattr(past_key_values, "get_usable_length")
++                else past_key_values.get_seq_length()
++            )
+ 
+         if position_ids is None:
+             device = input_ids.device if input_ids is not None else inputs_embeds.device
+@@ -1563,7 +1600,11 @@
+ 
+         next_cache = None
+         if use_cache:
+-            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
++            next_cache = (
++                next_decoder_cache.to_legacy_cache()
++                if use_legacy_cache and hasattr(next_decoder_cache, "to_legacy_cache")
++                else next_decoder_cache
++            )
+ 
+         if not return_dict:
+             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+@@ -1701,8 +1742,16 @@
+         if past_key_values is not None:
+             if isinstance(past_key_values, Cache):
+                 cache_length = past_key_values.get_seq_length()
+-                past_length = past_key_values.seen_tokens
+-                max_cache_length = past_key_values.get_max_length()
++                past_length = (
++                    past_key_values.seen_tokens
++                    if hasattr(past_key_values, "seen_tokens")
++                    else cache_length
++                )
++                max_cache_length = (
++                    past_key_values.get_max_length()
++                    if hasattr(past_key_values, "get_max_length")
++                    else past_key_values.get_max_cache_shape()
++                )
+             else:
+                 cache_length = past_length = past_key_values[0][0].shape[2]
+                 max_cache_length = None
