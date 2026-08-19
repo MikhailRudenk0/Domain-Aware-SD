@@ -396,7 +396,7 @@ def generate_cluster_transformers(
     temperature = float(cfg.generation.temperature)
     top_p = float(cfg.generation.top_p)
     max_new = int(cfg.generation.max_new_tokens)
-    token_budget = int(cfg.generation.get("token_budget", 24000))
+    token_budget = int(cfg.generation.get("token_budget", 16000))
     max_prompt = int(cfg.generation.get("max_prompt_tokens", 4096))
     eos_id = tokenizer.eos_token_id
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
@@ -424,10 +424,39 @@ def generate_cluster_transformers(
     if cur:
         batches.append(cur)
 
-    results = []
-    torch.manual_seed(int(cfg.data.shuffle_seed))
-    t_cluster = time.time()
-    for bi, batch in enumerate(batches):
+    # Prefill through the base model and apply lm_head to the LAST position
+    # only. BambooForCausalLM.forward materializes float32 logits for every
+    # prompt position (B x L x 32064) — several GB per batch and the main
+    # cause of prefill OOM on a 24 GB GPU.
+    base_model = getattr(model, "model", None)
+    lm_head = getattr(model, "lm_head", None)
+
+    def forward_last_logits(step_ids, step_attn, step_pos, cache):
+        with torch.no_grad():
+            if base_model is not None and lm_head is not None:
+                out = base_model(input_ids=step_ids, attention_mask=step_attn,
+                                 position_ids=step_pos, past_key_values=cache,
+                                 use_cache=True)
+                hidden = out.last_hidden_state if hasattr(out, "last_hidden_state") else out[0]
+                return lm_head(hidden[:, -1, :])
+            out = model(input_ids=step_ids, attention_mask=step_attn,
+                        position_ids=step_pos, past_key_values=cache, use_cache=True)
+            return out.logits[:, -1, :]
+
+    def run_batch(batch):
+        """Generate one batch; on CUDA OOM, split it in half and retry."""
+        try:
+            return _run_batch(batch)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if len(batch) == 1:
+                print("    OOM on a single sample — skipping it", flush=True)
+                return []
+            mid = len(batch) // 2
+            print(f"    OOM at batch size {len(batch)} — splitting in half", flush=True)
+            return run_batch(batch[:mid]) + run_batch(batch[mid:])
+
+    def _run_batch(batch):
         B = len(batch)
         maxlen = max(len(ids) for _, ids in batch)
         input_ids = torch.full((B, maxlen), pad_id, dtype=torch.long)
@@ -439,10 +468,7 @@ def generate_cluster_transformers(
         pos = (attn.cumsum(-1) - 1).clamp(min=0)
 
         cache = DynamicCache()
-        with torch.no_grad():
-            out = model(input_ids=input_ids, attention_mask=attn, position_ids=pos,
-                        past_key_values=cache, use_cache=True)
-        logits = out.logits[:, -1, :]
+        logits = forward_last_logits(input_ids, attn, pos, cache)
         cur_pos = pos[:, -1]
 
         trunks = [[] for _ in range(B)]
@@ -482,25 +508,28 @@ def generate_cluster_transformers(
             cur_pos = cur_pos + 1
             # done rows keep receiving pad tokens; their outputs are ignored.
             attn = torch.cat([attn, torch.ones((B, 1), dtype=attn.dtype, device=device)], dim=1)
-            with torch.no_grad():
-                out = model(input_ids=nxt, attention_mask=attn,
-                            position_ids=cur_pos.unsqueeze(1),
-                            past_key_values=cache, use_cache=True)
-            logits = out.logits[:, -1, :]
+            logits = forward_last_logits(nxt, attn, cur_pos.unsqueeze(1), cache)
 
-        for i, (sample, _ids) in enumerate(batch):
-            results.append({
+        return [
+            {
                 "cluster": cluster,
                 "prompt": sample["inputs"],
                 "reference": sample.get("targets", ""),
                 "trunk": trunks[i],
                 "top10_ids": tops_i[i],
                 "top10_probs": tops_p[i],
-            })
-        n_done = sum(len(b) for b in batches[: bi + 1])
-        rate = n_done / max(time.time() - t_cluster, 1e-6)
-        print(f"    Batch {bi + 1}/{len(batches)}: {B} prompts, "
-              f"{n_done}/{len(encoded)} samples, {rate:.1f} samples/s", flush=True)
+            }
+            for i, (sample, _ids) in enumerate(batch)
+        ]
+
+    results = []
+    torch.manual_seed(int(cfg.data.shuffle_seed))
+    t_cluster = time.time()
+    for bi, batch in enumerate(batches):
+        results.extend(run_batch(batch))
+        rate = len(results) / max(time.time() - t_cluster, 1e-6)
+        print(f"    Batch {bi + 1}/{len(batches)}: {len(batch)} prompts, "
+              f"{len(results)}/{len(encoded)} samples, {rate:.1f} samples/s", flush=True)
 
     return results
 

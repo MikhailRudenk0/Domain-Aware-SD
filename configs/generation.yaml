@@ -53,8 +53,9 @@ generation:
   # Batch size for vLLM
   batch_size: 4096
   # HF backend: batch prompts so that sum(prompt_len + max_new_tokens) per
-  # batch stays under this budget (bounds the KV cache on a 24 GB GPU)
-  token_budget: 24000
+  # batch stays under this budget (bounds the KV cache on a 24 GB GPU).
+  # On CUDA OOM the batch is split in half and retried automatically.
+  token_budget: 16000
   # HF backend: skip prompts longer than this many tokens
   max_prompt_tokens: 4096
 
