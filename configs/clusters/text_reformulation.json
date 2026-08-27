@@ -1,0 +1,13 @@
+[
+  "fix_punct_10templates",
+  "para_crawl_enes_10templates",
+  "true_case_10templates",
+  "wmt14_enfr_10templates",
+  "wmt16_translate_csen_10templates",
+  "wmt16_translate_deen_10templates",
+  "wmt16_translate_fien_10templates",
+  "wmt16_translate_roen_10templates",
+  "wmt16_translate_ruen_10templates",
+  "wmt16_translate_tren_10templates",
+  "word_segment_10templates"
+]

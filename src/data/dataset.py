@@ -85,10 +85,26 @@ class SpecDecDataset(Dataset):
 
     @classmethod
     def from_dir(cls, root: Union[str, Path], **kwargs) -> "SpecDecDataset":
-        """Walk root recursively, collect all *.jsonl and *.npz files, return a dataset."""
+        """Walk root recursively, collect all *.jsonl and *.npz files, return a dataset.
+
+        When clusters_filter is provided, only files whose stem matches a
+        cluster name are loaded — avoids reading all 66 NPZ files into RAM
+        when only a subset is needed.
+        """
         paths = walk_data_files(root)
         if not paths:
             raise FileNotFoundError(f"No *.jsonl or *.npz files found under {root}")
+
+        # Pre-filter files by cluster name BEFORE loading into memory
+        clusters_filter = kwargs.get("clusters_filter")
+        if clusters_filter is not None:
+            cluster_set = set(clusters_filter)
+            paths = [p for p in paths if p.stem in cluster_set]
+            if not paths:
+                raise FileNotFoundError(
+                    f"No data files matching clusters {clusters_filter} under {root}"
+                )
+
         return cls(paths, **kwargs)
 
     # ------------------------------------------------------------------
@@ -252,14 +268,22 @@ class SpecDecDataset(Dataset):
         gen_lens: List[int] = []
         top1_probs: List[float] = []
 
+        from .utils import NpzRecord
+
         for rec in self._records:
             fmt = detect_format(rec)
             if fmt == "synthetic":
-                gen_lens.append(len(rec.get("trunk", [])))
-                probs_rows = rec.get("top10_probs") or []
-                top1_per_pos = [row[0] for row in probs_rows if row]
-                if top1_per_pos:
-                    top1_probs.append(sum(top1_per_pos) / len(top1_per_pos))
+                if isinstance(rec, NpzRecord):
+                    gen_lens.append(rec.trunk_len)
+                    mtp = rec.mean_top1_prob()
+                    if mtp is not None:
+                        top1_probs.append(mtp)
+                else:
+                    gen_lens.append(len(rec.get("trunk", [])))
+                    probs_rows = rec.get("top10_probs") or []
+                    top1_per_pos = [row[0] for row in probs_rows if row]
+                    if top1_per_pos:
+                        top1_probs.append(sum(top1_per_pos) / len(top1_per_pos))
 
         result: dict = {
             "total_samples": len(self._records),

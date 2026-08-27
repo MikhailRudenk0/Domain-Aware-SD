@@ -1,0 +1,23 @@
+[
+  "ag_news_subset_10templates",
+  "bool_q_10templates",
+  "cola_10templates",
+  "glue_mrpc_10templates",
+  "glue_qqp_10templates",
+  "imdb_reviews_10templates",
+  "mnli_matched_10templates",
+  "mnli_mismatched_10templates",
+  "paws_wiki_10templates",
+  "qnli_10templates",
+  "quac_10templates",
+  "rte_10templates",
+  "sentiment140_10templates",
+  "snli_10templates",
+  "sst2_10templates",
+  "stsb_10templates",
+  "trec_10templates",
+  "wic_10templates",
+  "wnli_10templates",
+  "wsc_10templates",
+  "yelp_polarity_reviews_10templates"
+]
