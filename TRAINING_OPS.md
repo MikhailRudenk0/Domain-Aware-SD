@@ -149,21 +149,77 @@ tail -f /home/rudenko/multisd/Domain-Aware-SD/logs/train_text_reformulation.log
 ### Text Reformulation domain (11 clusters)
 
 **Config**: `configs/train_text_reformulation.yaml`
-**Planned**: 5 epochs (based on Understanding plateau at ~4.5 epochs)
-**Output**: `/media/public/rudenko/projects/Domain-Aware-SD/outputs/drafter_text_reformulation/`
+**Model**: Lite-Mistral-150M-v2-Instruct (156M params)
+**Data**: 327,330 samples (11 clusters × Flan tasks), split 95/5 train/val
+**Loss**: mixed (0.5 × CE + 0.5 × KL-divergence against target top-10)
+**Hardware**: 1× RTX 3090 (24GB), CUDA_VISIBLE_DEVICES=0
+**Batch size**: 32, bf16, cosine LR schedule, lr=5e-5, warmup 3%
+**Training time**: 4.2 hours (full 5 epochs)
+
+#### Eval metrics (on 5% held-out val set):
+
+| Epoch | eval_loss | top1_accuracy | Status |
+|-------|-----------|---------------|--------|
+| 0.5   | 2.198     | 53.77%        |        |
+| 1.0   | 2.165     | 54.15%        |        |
+| 1.5   | 2.156     | 54.28%        |        |
+| 2.0   | 2.152     | 54.33%        | plateau start |
+| 2.5   | 2.151     | 54.33%        |        |
+| 3.0   | 2.151     | 54.35%        |        |
+| 3.5   | 2.151     | 54.34%        |        |
+| 4.0   | 2.151     | 54.35%        |        |
+| 4.5   | 2.151     | 54.34%        |        |
+| **5.0** | **2.151** | **54.34%**  | **final** |
+
+**Final model**: `/media/public/rudenko/projects/Domain-Aware-SD/outputs/drafter_text_reformulation/final`
+**Last checkpoint**: `checkpoint-48590` (epoch 5.0)
+**train_loss**: 2.151, **train_samples_per_second**: 102.4
+
+#### Key observations:
+- Model reached plateau around epoch 2.0 — eval_loss improvement virtually stopped after epoch 2.0 (2.152 → 2.151)
+- Top-1 accuracy stabilized at ~54.3%, significantly lower than Understanding (65%) — text reformulation tasks (translation, punctuation, word segmentation) have more diverse output distributions
+- No overfitting: train_loss ≈ eval_loss throughout training (both ~2.15)
+- Training completed all 5 epochs cleanly; future runs could use 3 epochs without loss of quality
+
+### Mixed domain: Understanding + Text Reformulation (32 clusters)
+
+**Config**: `configs/train_mixed_ut.yaml`
+**Clusters**: `configs/clusters/mixed_ut.json` (21 Understanding + 11 Text Reformulation)
+**Model**: Lite-Mistral-150M-v2-Instruct (156M params)
+**Data**: 722,610 samples (32 clusters), split 95/5 train/val
+**Loss**: mixed (0.5 × CE + 0.5 × KL-divergence against target top-10)
+**Planned**: 5 epochs (~22,581 steps/epoch)
+**Output**: `/media/public/rudenko/projects/Domain-Aware-SD/outputs/drafter_mixed_ut/`
+
+Purpose: baseline for comparison — does a single model trained on the union of both domains match the domain-specific models, or does domain specialization help?
 
 #### Reproducibility
 
 ```bash
 # Understanding (from project root)
-CUDA_VISIBLE_DEVICES=0 MLFLOW_ALLOW_FILE_STORE=true \
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  /home/rudenko/miniconda3/envs/domain_sd/bin/python \
-  scripts/train_domain_drafter.py --config-name=train_understanding
+nohup systemd-run --user --scope -p MemoryMax=58G \
+  bash -c 'cd /home/rudenko/multisd/Domain-Aware-SD && \
+    export CUDA_VISIBLE_DEVICES=0 MLFLOW_ALLOW_FILE_STORE=true \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+    /home/rudenko/miniconda3/envs/domain_sd/bin/python \
+    scripts/train_domain_drafter.py --config-name=train_understanding' \
+  > logs/train_understanding.log 2>&1 &
 
 # Text Reformulation (from project root)
-CUDA_VISIBLE_DEVICES=0 MLFLOW_ALLOW_FILE_STORE=true \
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  /home/rudenko/miniconda3/envs/domain_sd/bin/python \
-  scripts/train_domain_drafter.py --config-name=train_text_reformulation
+nohup systemd-run --user --scope -p MemoryMax=58G \
+  bash -c 'cd /home/rudenko/multisd/Domain-Aware-SD && \
+    export CUDA_VISIBLE_DEVICES=0 MLFLOW_ALLOW_FILE_STORE=true \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+    /home/rudenko/miniconda3/envs/domain_sd/bin/python \
+    scripts/train_domain_drafter.py --config-name=train_text_reformulation' \
+  > logs/train_text_reformulation.log 2>&1 &
+
+# Mixed (from project root)
+nohup systemd-run --user --scope -p MemoryMax=58G \
+  bash -c 'cd /home/rudenko/multisd/Domain-Aware-SD && \
+    export CUDA_VISIBLE_DEVICES=0 MLFLOW_ALLOW_FILE_STORE=true \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+    /home/rudenko/miniconda3/envs/domain_sd/bin/python \
+    scripts/train_domain_drafter.py --config-name=train_mixed_ut' \
+  > logs/train_mixed_ut.log 2>&1 &
 ```

@@ -1,0 +1,54 @@
+# Domain-specific drafter: Mixed (Understanding + Text Reformulation) — 32 clusters
+# Baseline model trained on the union of both domain datasets.
+# 5 epochs, checkpoints saved twice per epoch, extended logging.
+#
+# Run from the project root:
+#     python scripts/train_domain_drafter.py --config-name=train_mixed_ut
+#
+# NOTE: save_steps and eval_steps are placeholders — the training script
+# overrides them based on actual sample count.
+
+model:
+  path: Lite-Mistral-150M-v2-Instruct
+  dtype: bfloat16
+  trust_remote_code: false
+
+data:
+  synthetic_dir: data/synthetic/train/v3
+  clusters_json: configs/clusters/mixed_ut.json
+  max_length: 512
+  max_gen_length: 256
+  min_top1_prob: null
+  val_fraction: 0.05
+  seed: 42
+
+training:
+  loss:
+    mode: mixed
+    ce_weight: 0.5
+    temperature: 1.0
+
+  output_dir: /media/public/rudenko/projects/Domain-Aware-SD/outputs/drafter_mixed_ut
+  num_train_epochs: 5
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 1
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  lr_scheduler_type: cosine
+  # Placeholders — overridden by launch script to get 2 saves per epoch
+  logging_steps: 10
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 4
+  bf16: true
+  fp16: false
+  gradient_checkpointing: false
+  dataloader_num_workers: 0
+  seed: 42
+
+mlflow:
+  tracking_uri: ./mlruns
+  experiment_name: domain_drafters
+  run_name: drafter_mixed_ut_5ep
