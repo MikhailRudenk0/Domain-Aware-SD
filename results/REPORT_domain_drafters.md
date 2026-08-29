@@ -253,11 +253,15 @@ While the absolute gains are modest (0.3–0.5 pp), this confirms the hypothesis
 
 ### Model checkpoints
 
-| Model | Path |
-|-------|------|
-| Understanding | `/media/public/rudenko/projects/Domain-Aware-SD/outputs/drafter_understanding/checkpoint-52803` |
-| Text Reformulation | `/media/public/rudenko/projects/Domain-Aware-SD/outputs/drafter_text_reformulation/final` |
-| Mixed (U+T) | `/media/public/rudenko/projects/Domain-Aware-SD/outputs/drafter_mixed_ut/final` |
+| Model | Local Path | HuggingFace |
+|-------|------------|-------------|
+| Understanding | `.../drafter_understanding/checkpoint-52803` | [mikhialo/drafter-understanding](https://huggingface.co/mikhialo/drafter-understanding) |
+| Text Reformulation | `.../drafter_text_reformulation/final` | [mikhialo/drafter-text-reformulation](https://huggingface.co/mikhialo/drafter-text-reformulation) |
+| Mixed (U+T) | `.../drafter_mixed_ut/final` | [mikhialo/drafter-mixed-ut](https://huggingface.co/mikhialo/drafter-mixed-ut) |
+
+### Synthetic dataset
+
+[mikhialo/domain-aware-sd-synthetic](https://huggingface.co/datasets/mikhialo/domain-aware-sd-synthetic) — train (66 NPZ, 2.2 GB), validation (66 JSONL, 93 MB), test (66 NPZ, 598 MB)
 
 ### Configs
 
