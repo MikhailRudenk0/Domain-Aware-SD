@@ -24,12 +24,13 @@ datasets:
   # Examples:
   #   - data/validation/v1/aeslc_10templates.jsonl
   #   - data/validation/v1                       # all clusters in that dir
-  - data/validation/v1
+  - data/synthetic/v1/validation/
 
-# "dataset" — use top-K from the synthetic dataset (cheap, K = whatever was
-# captured during generation, typically 10).
 # "model"   — load the target locally and run teacher-forcing inference to get
-# the full target distribution at every position.
+# the full target distribution at every position.  THIS IS THE CANONICAL MODE.
+# "dataset" — DEPRECATED (2026-09-23). Uses top-K from the synthetic dataset.
+#   Systematically underestimates overlap_area/topk_overlap (~67% mass visible).
+#   Kept for backward compat only; will emit a DeprecationWarning.
 target_source: model
 
 # Number of trunk positions to evaluate per sample.

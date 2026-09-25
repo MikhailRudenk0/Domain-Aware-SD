@@ -50,12 +50,12 @@ def iter_records_npz(path: Path, limit: int):
     ids = z["trunk_ids"]
     probs_q = z["top10_probs_q"]
     mask = z["top10_mask"]
-    # uint16 quantized probs: value / 65535
+    # uint16 quantized probs: value / 1000 (quantized as int(round(p * 1000)))
     off = 0
     for i in range(min(limit, len(lens))):
         L = int(lens[i])
         seg = ids[off:off + L].astype(np.int64).tolist()
-        p1 = [(float(probs_q[off + j, 0]) / 65535.0) if mask[off + j] else None for j in range(L)]
+        p1 = [(float(probs_q[off + j, 0]) / 1000.0) if mask[off + j] else None for j in range(L)]
         yield str(z["prompts"][i]), str(z["references"][i]), seg, p1
         off += L
 

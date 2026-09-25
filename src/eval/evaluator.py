@@ -62,21 +62,57 @@ def collate_batch(samples: List[dict], pad_token_id: int) -> CollatedBatch:
 def _build_inputs_single(
     di: DraftPositionInfo, target_info: TargetInfo
 ) -> MetricInputs:
-    """Build MetricInputs from a single draft's per-position info."""
-    K_target = len(target_info.topk_ids)
-    draft_at_target = di.prob_at_target_topk
-    s = float(draft_at_target.sum())
-    if s > 0:
-        draft_aligned = draft_at_target / s
-    else:
-        draft_aligned = np.full(K_target, 1.0 / max(K_target, 1), dtype=np.float32)
+    """Build MetricInputs on the union of draft top-K and target top-K.
 
-    K_metric = K_target
+    Each side is normalized by its own top-K independently:
+    * draft_raw:  draft's own top-K probs (raw from softmax) at their token IDs,
+                  zeros at target-only tokens.
+    * target_raw: target's top-K probs (de-renormalized to raw) at their token IDs,
+                  zeros at draft-only tokens.
+
+    This gives ``overlap_area = sum(min(draft_raw, target_raw))`` as a valid
+    lower bound on the acceptance rate.  For KL, both sides are renormalized
+    on the union support (``draft_aligned``, ``target_aligned``).
+    """
+    # 1. Build union of token IDs
+    all_ids = set(int(x) for x in target_info.topk_ids.tolist())
+    all_ids.update(int(x) for x in di.own_topk_ids.tolist())
+    support_ids = np.array(sorted(all_ids), dtype=np.int64)
+    S = len(support_ids)
+    id_to_idx = {int(tid): i for i, tid in enumerate(support_ids.tolist())}
+
+    # 2. Draft raw: own top-K probs at their positions, 0 elsewhere.
+    #    own_topk_probs are raw softmax values (torch.topk does NOT renormalize).
+    draft_raw = np.zeros(S, dtype=np.float32)
+    for tid, prob in zip(di.own_topk_ids.tolist(), di.own_topk_probs.tolist()):
+        idx = id_to_idx.get(int(tid))
+        if idx is not None:
+            draft_raw[idx] = float(prob)
+
+    # 3. Target raw: de-renormalize target probs using topk_sum.
+    #    topk_probs sums to 1 (renormalized); multiply by topk_sum to recover raw.
+    #    If topk_sum is unavailable (legacy), use renormalized as-is.
+    target_raw = np.zeros(S, dtype=np.float32)
+    scale = target_info.topk_sum if target_info.topk_sum is not None else 1.0
+    for tid, prob in zip(target_info.topk_ids.tolist(), target_info.topk_probs.tolist()):
+        idx = id_to_idx.get(int(tid))
+        if idx is not None:
+            target_raw[idx] = float(prob) * scale
+
+    # 4. Normalized versions on union support (for KL).
+    sd = float(draft_raw.sum())
+    draft_aligned = (draft_raw / sd) if sd > 0 else np.full(S, 1.0 / max(S, 1), dtype=np.float32)
+
+    st = float(target_raw.sum())
+    target_aligned = (target_raw / st) if st > 0 else np.full(S, 1.0 / max(S, 1), dtype=np.float32)
+
     return MetricInputs(
         draft_aligned=draft_aligned,
-        target_aligned=target_info.topk_probs,
+        target_aligned=target_aligned,
+        draft_raw=draft_raw,
+        target_raw=target_raw,
         draft_argmax_id=di.argmax_id,
-        draft_topk_ids=di.own_topk_ids[:K_metric],
+        draft_topk_ids=di.own_topk_ids,
         target_topk_ids=target_info.topk_ids,
     )
 
@@ -88,6 +124,10 @@ def _aggregate_over_union(
 ) -> MetricInputs:
     """Aggregate M models' distributions on the union support
     (target_topk_ids ∪ each model's own top-K) and build MetricInputs.
+
+    Each draft model's raw distribution is built on the union, then
+    aggregated. The result and the target are both kept on the full
+    union support for metrics.
     """
     all_ids = set(int(x) for x in target_info.topk_ids.tolist())
     for di in draft_infos:
@@ -110,19 +150,24 @@ def _aggregate_over_union(
     aggregator = get_aggregation(agg_name)
     agg_dist = aggregator(per_model_dist)  # [S], sums to 1
 
-    # Extract draft_aligned at target's top-K ids and renormalize
-    K_target = len(target_info.topk_ids)
-    draft_at_target = np.array(
-        [agg_dist[id_to_idx[int(tid)]] for tid in target_info.topk_ids.tolist()],
-        dtype=np.float32,
-    )
-    s = float(draft_at_target.sum())
-    if s > 0:
-        draft_aligned = draft_at_target / s
-    else:
-        draft_aligned = np.full(K_target, 1.0 / max(K_target, 1), dtype=np.float32)
+    # draft_raw on union: the aggregated distribution (already on union support)
+    draft_raw = agg_dist.copy()
+
+    # target_raw on union: de-renormalize target probs
+    target_raw = np.zeros(S, dtype=np.float32)
+    scale = target_info.topk_sum if target_info.topk_sum is not None else 1.0
+    for tid, prob in zip(target_info.topk_ids.tolist(), target_info.topk_probs.tolist()):
+        target_raw[id_to_idx[int(tid)]] = float(prob) * scale
+
+    # Normalized versions on union for KL
+    sd = float(draft_raw.sum())
+    draft_aligned = (draft_raw / sd) if sd > 0 else np.full(S, 1.0 / max(S, 1), dtype=np.float32)
+
+    st = float(target_raw.sum())
+    target_aligned = (target_raw / st) if st > 0 else np.full(S, 1.0 / max(S, 1), dtype=np.float32)
 
     # Aggregated argmax / top-K over the union support
+    K_target = len(target_info.topk_ids)
     argmax_idx = int(np.argmax(agg_dist))
     draft_argmax_id = int(support_ids[argmax_idx])
     topk_idx = np.argsort(-agg_dist)[:K_target]
@@ -130,7 +175,9 @@ def _aggregate_over_union(
 
     return MetricInputs(
         draft_aligned=draft_aligned,
-        target_aligned=target_info.topk_probs,
+        target_aligned=target_aligned,
+        draft_raw=draft_raw,
+        target_raw=target_raw,
         draft_argmax_id=draft_argmax_id,
         draft_topk_ids=draft_topk_ids,
         target_topk_ids=target_info.topk_ids,

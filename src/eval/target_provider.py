@@ -33,8 +33,9 @@ from src.eval._torch_utils import resolve_dtype
 @dataclass
 class TargetInfo:
     topk_ids: np.ndarray          # [K], int64
-    topk_probs: np.ndarray        # [K], float32, renormalized
+    topk_probs: np.ndarray        # [K], float32, renormalized to sum=1
     is_skipped: bool
+    topk_sum: Optional[float] = None  # sum of raw probs before renorm; None if skipped
 
     @classmethod
     def skipped(cls) -> "TargetInfo":
@@ -42,11 +43,19 @@ class TargetInfo:
             topk_ids=np.zeros(0, dtype=np.int64),
             topk_probs=np.zeros(0, dtype=np.float32),
             is_skipped=True,
+            topk_sum=None,
         )
 
 
 class DatasetTargetProvider:
     """Target-info source backed by the synthetic dataset's top-K entries.
+
+    .. deprecated:: 2026-09-23
+        Dataset mode is deprecated for evaluation. Always use
+        ``ModelTargetProvider`` (full target forward pass) for accurate
+        metrics. Dataset mode systematically underestimates overlap_area
+        and topk_overlap because it only sees the target's top-K
+        (~67% of probability mass). See JOURNAL.md for details.
 
     Strips padding rows (id == 0, prob == 0). Renormalizes the kept probs
     so they sum to 1 within the K support.
@@ -74,8 +83,9 @@ class DatasetTargetProvider:
             mask = pos_probs > 0
             pos_ids = ids[p][mask].astype(np.int64)
             pos_probs = pos_probs[mask].astype(np.float32)
-            pos_probs = pos_probs / pos_probs.sum()
-            infos.append(TargetInfo(pos_ids, pos_probs, False))
+            raw_sum = float(pos_probs.sum())
+            pos_probs = pos_probs / raw_sum
+            infos.append(TargetInfo(pos_ids, pos_probs, False, topk_sum=raw_sum))
         return infos
 
 
@@ -105,6 +115,7 @@ class ModelTargetProvider:
             str(model_dir),
             trust_remote_code=trust_remote_code,
             torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
         )
         # transformers>=5 does not materialize the non-persistent rotary buffers
         # of remote-code models (TurboSparse/Bamboo), which silently breaks RoPE.
@@ -145,10 +156,12 @@ class ModelTargetProvider:
                 topk = torch.topk(full, k=self.topk_K)
                 ids = topk.indices.cpu().numpy().astype(np.int64)
                 probs = topk.values.cpu().numpy().astype(np.float32)
-                s = float(probs.sum())
-                if s > 0:
-                    probs = probs / s
-                sample_infos.append(TargetInfo(ids, probs, False))
+                raw_sum = float(probs.sum())
+                if raw_sum > 0:
+                    probs_normed = probs / raw_sum
+                else:
+                    probs_normed = probs
+                sample_infos.append(TargetInfo(ids, probs_normed, False, topk_sum=raw_sum))
             result.append(sample_infos)
         return result
 

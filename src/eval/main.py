@@ -100,6 +100,15 @@ def main(cfg: DictConfig) -> None:
     # ── Target provider ──────────────────────────────────────────────────────
     target_source = cfg.target_source
     if target_source == "dataset":
+        import warnings
+        warnings.warn(
+            "target_source='dataset' is DEPRECATED since 2026-09-23. "
+            "Use target_source='model' for accurate metrics. "
+            "Dataset mode underestimates overlap_area/topk_overlap. "
+            "See JOURNAL.md.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
         target_provider = DatasetTargetProvider()
     elif target_source == "model":
         print(f"\nLoading target model: {target_dir}")

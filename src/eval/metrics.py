@@ -40,11 +40,18 @@ _EPS = 1e-12
 
 @dataclass
 class MetricInputs:
-    # Aligned distributions (same support, summing to 1):
-    #   - full mode:  both [V] over the full vocab
-    #   - top-K mode: both [K], renormalized within target's top-K
-    draft_aligned: Optional[np.ndarray] = None
-    target_aligned: Optional[np.ndarray] = None
+    # Aligned distributions on union support, normalized to sum=1 within union.
+    # Used by kl (which requires proper probability distributions).
+    draft_aligned: Optional[np.ndarray] = None   # [S], sum=1
+    target_aligned: Optional[np.ndarray] = None  # [S], sum=1
+
+    # Raw distributions on union support — NOT renormalized.
+    # Each side is normalized by its own top-K independently:
+    #   draft_raw:  draft's top-K probs placed at their token positions, 0 elsewhere
+    #   target_raw: target's top-K probs placed at their token positions, 0 elsewhere
+    # Used by overlap_area for honest lower-bound on acceptance rate.
+    draft_raw: Optional[np.ndarray] = None       # [S], sum <= 1
+    target_raw: Optional[np.ndarray] = None      # [S], sum <= 1
 
     # argmax / top-K of the full draft distribution
     draft_argmax_id: Optional[int] = None
@@ -55,11 +62,18 @@ class MetricInputs:
 
 
 def overlap_area(inp: MetricInputs) -> float:
-    """1 - TVD (total variation distance) between aligned distributions.
+    """Lower bound on SD acceptance rate.
 
-    Equal to the expected acceptance probability of an ideal speculative
-    decoder when draft and target are perfectly comparable distributions.
+    Uses raw (independently-normalized) distributions when available:
+    each side keeps its own top-K normalized within that top-K,
+    with zeros elsewhere on the union support.  sum(min(d, t)) is a
+    valid lower bound on the true acceptance rate.
+
+    Falls back to aligned (jointly-normalized) distributions when
+    raw fields are not populated.
     """
+    if inp.draft_raw is not None and inp.target_raw is not None:
+        return float(np.minimum(inp.draft_raw, inp.target_raw).sum())
     d = inp.draft_aligned
     t = inp.target_aligned
     return float(np.minimum(d, t).sum())
@@ -101,7 +115,7 @@ METRICS: Dict[str, Callable[[MetricInputs], float]] = {
 
 # Which fields each metric reads. Used by the runner to skip work.
 REQUIRED_FIELDS: Dict[str, tuple] = {
-    "overlap_area": ("draft_aligned", "target_aligned"),
+    "overlap_area": ("draft_raw", "target_raw", "draft_aligned", "target_aligned"),
     "top1_match": ("draft_argmax_id", "target_topk_ids"),
     "topk_overlap": ("draft_topk_ids", "target_topk_ids"),
     "kl": ("draft_aligned", "target_aligned"),

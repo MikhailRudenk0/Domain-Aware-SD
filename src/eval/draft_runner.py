@@ -6,7 +6,8 @@ A ``DraftRunner`` wraps a single draft model and exposes a single method,
 
     argmax_id              int    full-vocab argmax (over draft's softmax)
     own_topk_ids           [Km]   ids of draft's top-Km tokens
-    own_topk_probs         [Km]   corresponding probs (renormalized within Km)
+    own_topk_probs         [Km]   corresponding probs (raw from full-vocab softmax,
+                                  NOT renormalized — torch.topk preserves values)
     prob_at_target_topk    [Kt]   draft probs at the *target's* top-Kt ids
                                   (Kt may vary per position; values are not
                                   renormalized — caller renormalizes if needed)
